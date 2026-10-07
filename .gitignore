@@ -1,0 +1,26 @@
+# dependencies / build output
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+**/.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# never commit models, audio libraries or generated audio
+*.th
+*.safetensors
+models/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.aiff
+!resources/**/*.json
+
+# local / os
+.DS_Store
+.tmp/
+*.log
+.env
