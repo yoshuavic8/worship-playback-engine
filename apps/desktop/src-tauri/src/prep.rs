@@ -72,6 +72,7 @@ struct WorkerAnalysis {
     time_signature: Option<String>,
     duration: Option<f64>,
     sections: Vec<WorkerSection>,
+    bpm_alternatives: Vec<f64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -450,7 +451,8 @@ fn apply_result(ctx: &Ctx, song_id: &str, opts: &PrepOptions, r: &WorkerResult) 
         analysis["bpmConfidence"] = serde_json::json!(a.bpm_confidence);
         analysis["keyConfidence"] = serde_json::json!(a.key_confidence);
         analysis["detected"] = serde_json::json!({
-            "bpm": a.bpm, "key": a.key, "beatOffset": a.beat_offset, "sectionCount": a.sections.len()
+            "bpm": a.bpm, "key": a.key, "beatOffset": a.beat_offset, "sectionCount": a.sections.len(),
+            "bpmAlternatives": a.bpm_alternatives,
         });
     }
     if let Some(sep) = &r.separator {
