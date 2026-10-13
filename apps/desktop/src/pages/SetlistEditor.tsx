@@ -41,12 +41,14 @@ export function SetlistEditor({ id }: { id: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const runPreflight = useCallback(async () => {
+  const runPreflight = useCallback(async (quiet = false) => {
     setChecking(true);
     try {
-      setReport(await ipc.preflight(id));
-    } catch {
-      /* ignore */
+      const next = await ipc.preflight(id);
+      setReport(next);
+      if (!quiet) toast.success(`Pre-service check: ${next.verdict}`);
+    } catch (e) {
+      if (!quiet) toast.error("Pre-service check failed", { description: errMsg(e) });
     } finally {
       setChecking(false);
     }
@@ -61,7 +63,7 @@ export function SetlistEditor({ id }: { id: string }) {
       saveTimer.current = window.setTimeout(async () => {
         try {
           await ipc.saveSetlist(next);
-          runPreflight();
+          runPreflight(true);
         } catch (e) {
           toast.error("Could not save setlist", { description: errMsg(e) });
         }
@@ -71,7 +73,7 @@ export function SetlistEditor({ id }: { id: string }) {
   };
 
   useEffect(() => {
-    runPreflight();
+    runPreflight(true);
   }, [runPreflight, songs]);
 
   const songOf = (sid: string) => songs.find((s) => s.id === sid);
@@ -145,7 +147,7 @@ export function SetlistEditor({ id }: { id: string }) {
         </div>
 
         <div className="col-span-12 space-y-5 xl:col-span-4">
-          <Preflight report={report} checking={checking} onRun={runPreflight}
+          <Preflight report={report} checking={checking} onRun={() => runPreflight(false)}
             extra={unprepared.length > 0 && (
               <Button size="sm" variant="primary" icon={<Sparkles className="size-3.5" />} onClick={() => prepareSongs(unprepared.map((s) => s.id))}>
                 Prepare {unprepared.length} song{unprepared.length > 1 ? "s" : ""}

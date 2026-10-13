@@ -187,6 +187,32 @@ impl Player {
         self.cache.lock().map.clear();
     }
 
+    /// Click positions from the song's tempo map. A song with only a BPM is one step point.
+    fn build_beat_grid(&self, song: &Song, sr: u32, duration: f64) -> Option<BeatGrid> {
+        let grid = song.resolved_grid()?;
+        crate::audio::tempo_map::to_beat_grid(&grid, sr, duration)
+    }
+
+    /// Push a new beat table to the mixer without reloading the audio.
+    pub fn apply_grid(&self, ctx: &Ctx, song: &Song) {
+        let info = self.inner.lock().loaded.clone();
+        let Some(info) = info else { return };
+        if info.song_id != song.id {
+            return;
+        }
+        let Some(tempo) = song.resolved_grid() else { return };
+        let sr = ctx.engine.sample_rate();
+        let Some(grid) = crate::audio::tempo_map::to_beat_grid(&tempo, sr, song.duration.max(info.duration)) else {
+            return;
+        };
+        let cue_at = info
+            .segments
+            .iter()
+            .map(|s| Some(crate::audio::tempo_map::cue_frame(&tempo, s.start, song.cue_lead_beats, sr)))
+            .collect();
+        ctx.engine.send(MixerCmd::SetBeatTable { grid, cue_at });
+    }
+
     // ---------------- state ----------------
 
     fn effective_state(&self, ctx: &Ctx) -> PlaybackState {
@@ -302,7 +328,10 @@ impl Player {
         let stems_ok = file_exists(song, &song.stems.other)
             && file_exists(song, &song.stems.bass)
             && file_exists(song, &song.stems.drums);
-        let use_stems = stems_ok && (context == PlayContext::Rehearsal || preset_override);
+        // Play the stems themselves whenever they exist, including live.
+        // Starting levels match the prepared mix; the MD can then ride each
+        // track. The rendered backing is only the fallback.
+        let use_stems = stems_ok;
 
         let mut tracks: Vec<Track> = vec![];
         let mut infos: Vec<TrackInfo> = vec![];
@@ -372,8 +401,9 @@ impl Player {
             }
         }
 
-        // Guide vocal: monitor only, never FOH.
-        if file_exists(song, &song.stems.vocals) && (song.routing.guide_vocal_to_monitor || context == PlayContext::Rehearsal) {
+        // Guide vocal: monitor only, never FOH. Always loaded when the stem
+        // exists so it can be opened from the live mixer.
+        if file_exists(song, &song.stems.vocals) {
             if let Ok(v) = self.get_buffer(&song_path(song, song.stems.vocals.as_ref().unwrap()), rate) {
                 let mut t = Track::new(TrackRole::Vocals, v, db_to_gain(-3.0), false, true);
                 t.muted = !(song.routing.guide_vocal_to_monitor && context == PlayContext::Live)
@@ -390,8 +420,8 @@ impl Player {
         let plan = arrangement::build_plan(&song.sections, &arr, duration);
         let start_segment = arrangement::start_index(&plan, item.and_then(|i| i.start_section_id.as_deref()));
 
-        // Click grid.
-        let grid = song.bpm.and_then(|bpm| BeatGrid::new(bpm, song.beat_offset, song.beats_per_bar(), rate));
+        let tempo = song.resolved_grid();
+        let grid = self.build_beat_grid(&song, ctx.engine.sample_rate(), duration);
         let click_available = grid.is_some();
         let mut click_enabled = item
             .and_then(|i| i.click_enabled)
@@ -408,43 +438,46 @@ impl Player {
         let has_sections = !song.sections.is_empty();
         let voice = ctx.settings.read().cue_voice.clone();
         let cue_root = ctx.paths.read().cues();
-        let mut cue_failed = false;
+        let mut missing_cues: Vec<String> = Vec::new();
         let segments: Vec<Segment> = plan
             .iter()
             .map(|s| {
-                let cue = if has_sections && !cue_failed {
+                let cue = if has_sections {
                     match crate::cue::ensure_cue(&cue_root, voice.as_deref(), &s.label)
                         .and_then(|p| self.get_buffer(&p, rate))
                     {
                         Ok(b) => Some(b),
                         Err(e) => {
-                            cue_failed = true;
-                            logs::warn(cat::AUDIO, format!("cue render failed: {e}"));
+                            logs::warn(cat::AUDIO, format!("cue render failed for \"{}\": {e:#}", s.label));
+                            missing_cues.push(s.label.clone());
                             None
                         }
                     }
                 } else {
                     None
                 };
+                let cue_at = tempo.as_ref().map(|g| crate::audio::tempo_map::cue_frame(g, s.start, song.cue_lead_beats, rate));
                 Segment {
                     start: (s.start * rate as f64).round() as u64,
                     end: ((s.end * rate as f64).round() as u64).min(frames),
                     cue,
+                    cue_at,
                 }
             })
             .collect();
-        let cue_available = has_sections && !cue_failed;
-        if cue_enabled && !cue_available {
-            if !has_sections {
-                warnings.push("Cue is enabled but the song has no sections.".into());
-            } else {
-                warnings.push("Cue audio could not be generated.".into());
-            }
+        let cue_available = has_sections && segments.iter().any(|s| s.cue.is_some());
+        if cue_enabled && !has_sections {
+            warnings.push("Cue is enabled but the song has no sections.".into());
             cue_enabled = false;
+        } else if cue_enabled && has_sections && !cue_available {
+            warnings.push("Cue audio could not be generated.".into());
+            cue_enabled = false;
+        } else if !missing_cues.is_empty() {
+            warnings.push(format!("Some cues could not be generated: {}.", missing_cues.join(", ")));
         }
 
         let bpb = song.beats_per_bar();
-        let cue_lead_frames = match grid {
+        let cue_lead_frames = match grid.as_ref() {
             Some(g) => (g.frames_per_beat * song.cue_lead_beats.max(1) as f64) as u64,
             None => rate as u64 * 2,
         };

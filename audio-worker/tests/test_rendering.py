@@ -7,6 +7,7 @@ import pytest
 from wpe_worker import testaudio
 from wpe_worker.audio import io
 from wpe_worker.protocol import PrepareRequest, StemSettings, WorkerError
+from wpe_worker.audio.clean import polish
 from wpe_worker.rendering.backing import render_backing, stem_gains
 from wpe_worker.rendering.waveform import peaks
 
@@ -37,6 +38,23 @@ def test_limiter_protects_clipping():
     b, _, info = render_backing(loud, StemSettings(drums="keep", bass_db=0.0))
     assert np.max(np.abs(b)) <= 0.98 + 1e-6
     assert info["limiterDbBacking"] < 0
+
+
+def test_polish_removes_a_stationary_whistle():
+    sr = 48000
+    n = sr * 2
+    rng = np.random.default_rng(1)
+    noise = rng.standard_normal((2, n)).astype(np.float32) * 0.02
+    t = np.arange(n) / sr
+    whistle = np.sin(2 * np.pi * 3150 * t).astype(np.float32) * 0.25
+    dirty = noise + whistle
+    clean = polish(dirty, sr)
+
+    def bin_at(a: np.ndarray) -> float:
+        spec = np.abs(np.fft.rfft(a.mean(axis=0) * np.hanning(n)))
+        return float(spec[int(round(3150 / sr * n))])
+
+    assert bin_at(clean) < bin_at(dirty) * 0.35
 
 
 def test_waveform_format():

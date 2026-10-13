@@ -90,7 +90,8 @@ export function Preparation() {
         <div className="col-span-12 space-y-5 xl:col-span-4">
           <Card title="Engine">
             <div className="space-y-3 text-sm">
-              <InfoRow label="Separation" value={settings?.separationEngine === "auto" ? "Auto (MLX → PyTorch MPS → CPU)" : settings?.separationEngine ?? "—"} />
+              <InfoRow label="Profile" value={settings?.separationProfile === "fast" ? "Fast · Demucs only" : "Worship · Inst HQ 3 + Demucs"} />
+              <InfoRow label="Instruments" value={settings?.separationEngine === "auto" ? "Auto (MLX → PyTorch MPS → CPU)" : settings?.separationEngine ?? "—"} />
               <InfoRow label="Model" value={settings?.separationModel ?? "—"} />
               <InfoRow label="Installed models" value={installed.length ? installed.map((m) => m.name).join(", ") : "None"} warn={!installed.length} />
               {avg && <InfoRow label="Average time / song" value={`${Math.round(avg)} s`} />}

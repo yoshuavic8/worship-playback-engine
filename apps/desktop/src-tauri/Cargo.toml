@@ -3,6 +3,7 @@ name = "worship-playback-engine"
 version = "0.1.0"
 description = "Worship Playback Engine — From Song to Sunday. Automatically."
 authors = ["Worship Playback Engine"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.80"
 

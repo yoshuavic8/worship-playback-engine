@@ -25,9 +25,16 @@ export function Settings() {
   const checkAi = async () => {
     setCheckingAi(true);
     try {
-      setAi(await ipc.aiStatus());
+      const status = await ipc.aiStatus();
+      setAi(status);
+      if (status.available) {
+        toast.success(status.model ? `Connected · ${status.model}` : `Connected · ${status.provider}`);
+      } else {
+        toast.message("AI provider not reachable", { description: "Check Ollama or your API settings." });
+      }
     } catch {
       setAi(null);
+      toast.error("Could not check AI connection");
     } finally {
       setCheckingAi(false);
     }
@@ -73,12 +80,16 @@ export function Settings() {
                 <Segmented<number> size="sm" value={settings.uiScale} onChange={(uiScale) => save({ uiScale })}
                   options={[{ value: 0.9, label: "S" }, { value: 1, label: "M" }, { value: 1.1, label: "L" }, { value: 1.25, label: "XL" }]} />
               </Row>
+              <Row label="Display language" hint="Dates and relative times. Editor and Live labels stay in English for now.">
+                <Segmented<"en" | "id"> size="sm" value={settings.uiLocale ?? "en"} onChange={(uiLocale) => save({ uiLocale })}
+                  options={[{ value: "en", label: "English" }, { value: "id", label: "Indonesia" }]} />
+              </Row>
             </div>
           </Card>
 
           <Card title="Playback">
             <div className="divide-y divide-line">
-              <Row label="Default count-in" hint="For newly imported songs (click plays before the track starts)">
+              <Row label="Default count-in" hint="Clicks for this many bars, then the song enters on beat 1">
                 <Segmented<number> size="sm" value={settings.defaultCountInBars} onChange={(defaultCountInBars) => save({ defaultCountInBars })}
                   options={[{ value: 0, label: "Off" }, { value: 1, label: "1 bar" }, { value: 2, label: "2 bars" }]} />
               </Row>
@@ -99,7 +110,11 @@ export function Settings() {
 
           <Card title="Stem separation" subtitle="Runs only during preparation, never during live playback">
             <div className="divide-y divide-line">
-              <Row label="Engine" hint="Auto tries MLX (fastest on Apple Silicon), then PyTorch on GPU, then CPU">
+              <Row label="Profile" hint="Worship removes vocals with Inst HQ 3, then splits drums, bass and other with Demucs. Fast is Demucs only.">
+                <Segmented<string> size="sm" value={settings.separationProfile ?? "worship"} onChange={(separationProfile) => save({ separationProfile })}
+                  options={[{ value: "worship", label: "Worship" }, { value: "fast", label: "Fast" }]} />
+              </Row>
+              <Row label="Engine" hint="Instrument splitter. Auto tries MLX, then PyTorch on GPU, then CPU">
                 <Segmented<string> size="sm" value={settings.separationEngine} onChange={(separationEngine) => save({ separationEngine })}
                   options={[{ value: "auto", label: "Auto" }, { value: "demucs-mlx", label: "MLX" }, { value: "demucs", label: "PyTorch" }]} />
               </Row>

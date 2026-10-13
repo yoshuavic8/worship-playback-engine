@@ -9,7 +9,7 @@ use crate::audio::routing::{self, RoutingIssue};
 use crate::core::{self, Ctx};
 use crate::logs::{self, cat, LogEntry};
 use crate::models::*;
-use crate::player::{LiveInfo, LoadedInfo, PlayContext, PlaybackStatus};
+use crate::player::{LiveInfo, LoadedInfo, PlayContext};
 use crate::prep::PrepOptions;
 use crate::presets::snap_bass_db;
 use crate::settings::AppSettings;
@@ -67,6 +67,9 @@ pub fn save_settings(ctx: S, mut settings: AppSettings) -> R<AppSettings> {
     }
     if !["auto", "mps", "cpu"].contains(&settings.separation_device.as_str()) {
         settings.separation_device = "auto".into();
+    }
+    if !["worship", "fast"].contains(&settings.separation_profile.as_str()) {
+        settings.separation_profile = "worship".into();
     }
     let old = ctx.settings.read().clone();
     if settings.library_path != old.library_path {
@@ -245,11 +248,6 @@ pub fn list_songs(ctx: S) -> R<Vec<Song>> {
     ctx.db.list_songs().map_err(e)
 }
 
-#[tauri::command]
-pub fn get_song(ctx: S, id: String) -> R<Song> {
-    ctx.db.get_song(&id).map_err(e)?.ok_or_else(|| "Song not found".into())
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
@@ -292,11 +290,24 @@ pub fn sanitize_song(mut s: Song) -> Song {
         s.title = "Untitled".into();
     }
     s.artist = s.artist.trim().to_string();
-    s.bpm = s.bpm.filter(|b| (20.0..=300.0).contains(b)).map(|b| (b * 100.0).round() / 100.0);
+    s.bpm = s.bpm.filter(|b| (20.0..=300.0).contains(b)).map(|b| (b * 1000.0).round() / 1000.0);
     let (n, d) = parse_time_signature(&s.time_signature);
     s.time_signature = format!("{n}/{d}");
     s.key = s.key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty() && k.len() <= 6);
-    s.beat_offset = s.beat_offset.clamp(0.0, 30.0);
+    s.beat_offset = s.beat_offset.max(0.0);
+    if s.duration > 0.0 {
+        s.beat_offset = s.beat_offset.min(s.duration);
+    }
+    if let Some(g) = s.grid.take() {
+        if let Some(mut g) = crate::audio::tempo_map::sanitize_grid(g, s.beats_per_bar(), s.duration) {
+            g.beats_per_bar = s.beats_per_bar();
+            if let Some(p) = g.points.first() {
+                s.bpm = Some(p.bpm);
+            }
+            s.beat_offset = g.beat1_sec;
+            s.grid = Some(g);
+        }
+    }
     s.count_in_bars = s.count_in_bars.min(4);
     s.cue_lead_beats = s.cue_lead_beats.clamp(1, 16);
     s.prep.bass_db = snap_bass_db(s.prep.bass_db);
@@ -327,9 +338,32 @@ pub fn sanitize_song(mut s: Song) -> Song {
     s
 }
 
+fn warning_text(v: &serde_json::Value) -> String {
+    v.as_str().unwrap_or("").to_ascii_lowercase()
+}
+
+/// Soft notes (uncertain BPM) are things the user can confirm. Hard notes (silent
+/// backing, wrong sample rate) stay until the audio itself is fixed.
+fn is_advisory(text: &str) -> bool {
+    text.contains("bpm") || text.contains("tempo") || text.contains("downbeat") || text.contains("uncertain")
+}
+
+fn warning_count(analysis: &serde_json::Value) -> usize {
+    analysis.get("warnings").and_then(|w| w.as_array()).map(|a| a.len()).unwrap_or(0)
+}
+
+fn promote_if_clear(song: &mut Song) {
+    let left = song.analysis.as_ref().map(warning_count).unwrap_or(0);
+    if left == 0 && song.rendered.backing.is_some() && matches!(song.status, SongStatus::Warning) {
+        song.status = SongStatus::Ready;
+    }
+}
+
 #[tauri::command]
 pub fn save_song(ctx: S, song: Song) -> R<Song> {
     let existing = ctx.db.get_song(&song.id).map_err(e)?.ok_or("Song not found")?;
+    let tempo_edited = existing.bpm != song.bpm || (existing.beat_offset - song.beat_offset).abs() > 5e-4;
+    let key_edited = existing.key != song.key;
     let mut s = sanitize_song(song);
     // Paths, status and analysis are owned by the backend.
     s.dir = existing.dir.clone();
@@ -341,6 +375,19 @@ pub fn save_song(ctx: S, song: Song) -> R<Song> {
     s.created_at = existing.created_at.clone();
     s.prepared_at = existing.prepared_at.clone();
     s.duration = existing.duration;
+    if matches!(s.status, SongStatus::Warning) && (tempo_edited || key_edited) {
+        if let Some(analysis) = s.analysis.as_mut() {
+            if let Some(arr) = analysis.get_mut("warnings").and_then(|w| w.as_array_mut()) {
+                arr.retain(|w| {
+                    let l = warning_text(w);
+                    let about_tempo = l.contains("bpm") || l.contains("tempo") || l.contains("downbeat") || l.contains("uncertain");
+                    let about_key = l.contains("key");
+                    !((tempo_edited && about_tempo) || (key_edited && about_key))
+                });
+            }
+        }
+        promote_if_clear(&mut s);
+    }
     ctx.db.upsert_song(&s).map_err(e)?;
     library::write_song_json(&s).map_err(e)?;
     // Pre-render cue clips for any new labels in the background.
@@ -354,6 +401,23 @@ pub fn save_song(ctx: S, song: Song) -> R<Song> {
     });
     let _ = tauri::Emitter::emit(&ctx.app, "library:changed", ());
     Ok(s)
+}
+
+/// The user listened and the tempo / key are fine. Clears the "needs review" note.
+#[tauri::command]
+pub fn accept_song_review(ctx: S, id: String) -> R<Song> {
+    let mut song = ctx.db.get_song(&id).map_err(e)?.ok_or("Song not found")?;
+    if let Some(analysis) = song.analysis.as_mut() {
+        if let Some(arr) = analysis.get_mut("warnings").and_then(|w| w.as_array_mut()) {
+            arr.retain(|w| !is_advisory(&warning_text(w)));
+        }
+    }
+    promote_if_clear(&mut song);
+    song.updated_at = now_iso();
+    ctx.db.upsert_song(&song).map_err(e)?;
+    library::write_song_json(&song).map_err(e)?;
+    let _ = tauri::Emitter::emit(&ctx.app, "library:changed", ());
+    Ok(song)
 }
 
 #[tauri::command]
@@ -419,6 +483,65 @@ pub async fn rerender_backing(ctx: S<'_>, id: String) -> R<Song> {
         ctx.player.invalidate_song(&song);
         logs::info(cat::PREPARATION, format!("Re-rendered backing for \"{}\"", song.title));
         let _ = tauri::Emitter::emit(&ctx.app, "library:changed", ());
+        Ok(song)
+    })
+    .await
+}
+
+// ---------------- beat grid ----------------
+
+/// Update the first downbeat position for a song ("Set Downbeat" action).
+#[tauri::command]
+pub async fn set_downbeat(ctx: S<'_>, id: String, offset_secs: f64) -> R<Song> {
+    let ctx = ctx.inner().clone();
+    blocking(move || {
+        let mut song = ctx.db.get_song(&id)?.ok_or_else(|| anyhow::anyhow!("Song not found"))?;
+        song.beat_offset = offset_secs.max(0.0);
+        if song.duration > 0.0 {
+            song.beat_offset = song.beat_offset.min(song.duration);
+        }
+        if let Some(g) = song.grid.as_mut() {
+            g.beat1_sec = song.beat_offset;
+        }
+        song.updated_at = now_iso();
+        let analysis_path = std::path::Path::new(&song.dir).join("analysis").join("analysis.json");
+        if analysis_path.is_file() {
+            let raw = std::fs::read_to_string(&analysis_path).unwrap_or_else(|_| "{}".into());
+            let mut json: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::json!({}));
+            json["beatOffset"] = serde_json::json!(offset_secs);
+            let _ = std::fs::write(&analysis_path, json.to_string());
+        }
+        ctx.db.upsert_song(&song)?;
+        library::write_song_json(&song)?;
+        ctx.player.invalidate_song(&song);
+        ctx.player.apply_grid(&ctx, &song);
+        Ok(song)
+    })
+    .await
+}
+
+/// Replace the tempo map and rebuild the click, cue, and count-in from it.
+#[tauri::command]
+pub async fn set_grid(ctx: S<'_>, id: String, grid: crate::models::Grid) -> R<Song> {
+    let ctx = ctx.inner().clone();
+    blocking(move || {
+        let mut song = ctx.db.get_song(&id)?.ok_or_else(|| anyhow::anyhow!("Song not found"))?;
+        // The client's map owns the meter. The song row may still have the previous signature.
+        let bpb = grid.beats_per_bar.max(1);
+        song.time_signature = meter_for_beats(&song.time_signature, bpb);
+        let Some(g) = crate::audio::tempo_map::sanitize_grid(grid, bpb, song.duration) else {
+            return Err(anyhow::anyhow!("Tempo map needs at least one point"));
+        };
+        if let Some(p) = g.points.first() {
+            song.bpm = Some(p.bpm);
+        }
+        song.beat_offset = g.beat1_sec;
+        song.grid = Some(g);
+        song.updated_at = now_iso();
+        ctx.db.upsert_song(&song)?;
+        library::write_song_json(&song)?;
+        ctx.player.invalidate_song(&song);
+        ctx.player.apply_grid(&ctx, &song);
         Ok(song)
     })
     .await
@@ -604,10 +727,6 @@ pub fn player_pause(ctx: S) -> R<()> {
     ctx.player.pause(&ctx).map_err(e)
 }
 #[tauri::command]
-pub fn player_toggle(ctx: S, count_in: bool) -> R<()> {
-    ctx.player.toggle(&ctx, count_in).map_err(e)
-}
-#[tauri::command]
 pub fn player_stop(ctx: S) -> R<()> {
     ctx.player.stop(&ctx).map_err(e)
 }
@@ -648,16 +767,8 @@ pub fn player_set_cue(ctx: S, enabled: bool) {
     ctx.player.set_cue(&ctx, enabled)
 }
 #[tauri::command]
-pub fn player_status(ctx: S) -> PlaybackStatus {
-    ctx.player.status(&ctx)
-}
-#[tauri::command]
 pub fn player_loaded(ctx: S) -> Option<LoadedInfo> {
     ctx.player.loaded()
-}
-#[tauri::command]
-pub fn player_unload(ctx: S) {
-    ctx.player.unload(&ctx)
 }
 
 // ---------------- live ----------------
@@ -736,14 +847,6 @@ pub fn install_python_env(ctx: S) -> R<()> {
 #[tauri::command]
 pub fn get_logs(limit: Option<usize>, category: Option<String>) -> Vec<LogEntry> {
     logs::recent(limit.unwrap_or(500), category.as_deref())
-}
-
-#[tauri::command]
-pub fn app_paths(ctx: S) -> serde_json::Value {
-    let p = ctx.paths.read();
-    serde_json::json!({
-        "root": p.root, "songs": p.songs(), "logs": p.logs(), "models": p.models(), "workerDir": ctx.worker_dir
-    })
 }
 
 // ---------------- AI ----------------

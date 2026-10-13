@@ -6,3 +6,4 @@ pub mod engine;
 pub mod mixer;
 pub mod routing;
 pub mod state;
+pub mod tempo_map;

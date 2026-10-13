@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { loadSong } from "@/lib/actions";
 import { useApp, usePlayback } from "@/store/app";
 import { errMsg, ipc } from "./ipc";
 
@@ -15,9 +16,15 @@ async function guard(p: Promise<unknown>) {
   }
 }
 
-export function togglePlay() {
-  const l = loaded();
-  if (!l) return;
+export async function togglePlay() {
+  let l = loaded();
+  if (!l) {
+    const r = useApp.getState().route;
+    if (r.page === "song" && r.id) {
+      l = await loadSong(r.id, "rehearsal");
+      if (!l) return;
+    } else return;
+  }
   const s = st();
   if (isRolling(s?.state)) return guard(ipc.pause());
   const fromTop = !s || s.position < 0.05 || s.state === "STOPPED" || s.state === "READY";

@@ -12,6 +12,7 @@ dependencies = [
     "librosa>=0.10.2",
     "demucs>=4.1.0",
     "torch>=2.6",
+    "onnxruntime>=1.19",
     "demucs-mlx>=1.6; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 

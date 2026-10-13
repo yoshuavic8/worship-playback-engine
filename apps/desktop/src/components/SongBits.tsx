@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
 import { useApp } from "@/store/app";
+import { visibleReviewWarnings } from "@/lib/reviewWarnings";
 import type { Song, SongStatus } from "@/lib/types";
 import { Badge } from "./ui";
 
@@ -8,7 +9,7 @@ const STATUS: Record<SongStatus, { label: string; tone: "neutral" | "ok" | "warn
   queued: { label: "Queued", tone: "mon" },
   processing: { label: "Preparing", tone: "accent" },
   ready: { label: "Live-ready", tone: "ok" },
-  warning: { label: "Check", tone: "warn" },
+  warning: { label: "Needs review", tone: "warn" },
   error: { label: "Error", tone: "err" },
 };
 
@@ -25,12 +26,16 @@ export function SongStatusBadge({ song }: { song: Song }) {
     warning: <AlertTriangle className="size-3" />,
     error: <XCircle className="size-3" />,
   }[song.status];
+  const { active, stale } = visibleReviewWarnings(song);
+  const why = active.join(" · ") || stale.join(" · ");
   return (
-    <Badge tone={st.tone}>
-      {icon}
-      {st.label}
-      {job && <span className="tnum opacity-80">{Math.round(job.progress * 100)}%</span>}
-    </Badge>
+    <span title={why || song.lastError || (song.status === "warning" ? "Open the song — something needs a listen before it is live-ready" : undefined)} className="inline-flex">
+      <Badge tone={st.tone}>
+        {icon}
+        {st.label}
+        {job && <span className="tnum opacity-80">{Math.round(job.progress * 100)}%</span>}
+      </Badge>
+    </span>
   );
 }
 
@@ -39,7 +44,7 @@ export function KeyBpm({ song, className = "" }: { song: Pick<Song, "key" | "bpm
     <span className={`tnum inline-flex items-center gap-2 text-fg-2 ${className}`}>
       <span className="min-w-[2.2ch] font-semibold text-fg">{song.key ?? "—"}</span>
       <span className="text-faint">·</span>
-      <span>{song.bpm ? `${Math.round(song.bpm * 10) / 10}` : "—"} <span className="text-muted">BPM</span></span>
+      <span>{song.bpm ? `${Math.round(song.bpm * 1000) / 1000}` : "—"} <span className="text-muted">BPM</span></span>
       {song.timeSignature !== "4/4" && (
         <>
           <span className="text-faint">·</span>

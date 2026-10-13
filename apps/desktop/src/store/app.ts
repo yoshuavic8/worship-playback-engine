@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { setUiLocale } from "@/lib/locale";
 import { errMsg, ipc } from "@/lib/ipc";
 import type {
   AppSettings, AudioSettings, AudioStatus, Bootstrap, LiveInfo, LoadedInfo, PlaybackStatus, PreparationJob,
@@ -76,6 +77,7 @@ export const useApp = create<AppState>((set, get) => ({
       const [songs, setlists, jobs, audioStatus, loaded, live] = await Promise.all([
         ipc.listSongs(), ipc.listSetlists(), ipc.listJobs(), ipc.audioStatus(), ipc.loaded(), ipc.liveInfo(),
       ]);
+      setUiLocale(b.settings.uiLocale === "id" ? "id" : "en");
       set({
         ready: true,
         version: b.version,
@@ -127,6 +129,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   upsertJob: (j) => set({ jobs: { ...get().jobs, [j.id]: j } }),
   setSettings: (settings) => {
+    setUiLocale(settings.uiLocale === "id" ? "id" : "en");
     document.documentElement.style.setProperty("--ui-scale", String(settings.uiScale || 1));
     set({ settings });
   },

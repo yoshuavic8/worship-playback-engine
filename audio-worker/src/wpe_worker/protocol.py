@@ -11,8 +11,22 @@ from typing import Any
 _lock = threading.Lock()
 
 
+def _json_default(o: Any) -> Any:
+    """NumPy scalars and arrays are not JSON-serializable. Keep them as numbers."""
+    if type(o).__module__ == "numpy":
+        shape = getattr(o, "shape", None)
+        if shape == ():
+            return o.item()
+        return o.tolist()
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def dumps(obj: Any) -> str:
+    return json.dumps(obj, default=_json_default)
+
+
 def emit(event: str, **payload: Any) -> None:
-    line = json.dumps({"event": event, **payload}, default=str)
+    line = dumps({"event": event, **payload})
     with _lock:
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
@@ -52,6 +66,9 @@ class SeparationConfig:
     device: str = "auto"
     models_dir: str = ""
     mlx_models_dir: str = ""
+    # worship = Inst HQ 3 vocals, then Demucs on the instrumental. fast = Demucs only.
+    profile: str = "worship"
+    mdx_models_dir: str = ""
 
 
 @dataclass
@@ -77,6 +94,9 @@ class PrepareRequest:
         sep = d.get("separation") or {}
         an = d.get("analysis") or {}
         mode = lambda v, default: v if v in ("remove", "keep", "optional") else default  # noqa: E731
+        profile = str(sep.get("profile") or "worship")
+        if profile not in ("worship", "fast"):
+            profile = "worship"
         return PrepareRequest(
             song_id=d["songId"],
             input=d["input"],
@@ -98,6 +118,8 @@ class PrepareRequest:
                 device=str(sep.get("device") or "auto"),
                 models_dir=str(sep.get("modelsDir") or ""),
                 mlx_models_dir=str(sep.get("mlxModelsDir") or ""),
+                profile=profile,
+                mdx_models_dir=str(sep.get("mdxModelsDir") or ""),
             ),
             analysis_enabled=bool(an.get("enabled", True)),
             time_signature=str(an.get("timeSignature") or "4/4"),

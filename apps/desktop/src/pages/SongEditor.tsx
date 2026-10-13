@@ -1,25 +1,42 @@
-import {
-  ArrowLeft, Crosshair, Headphones, Loader2, Magnet, Pause, Play, Plus, RotateCcw, Save, Sparkles, Square, Trash2,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AiAssistant } from "@/components/AiAssistant";
 import { ArrangementEditor } from "@/components/Arrangement";
 import { PresetPicker, StemControls, samePrep } from "@/components/StemSettings";
-import { SongStatusBadge } from "@/components/SongBits";
-import { Waveform } from "@/components/Waveform";
-import { Badge, Button, Card, IconButton, Slider, Switch, Tip } from "@/components/ui";
-import { loadSong, prepareSongs } from "@/lib/actions";
+import { SongTimeline, type SnapMode } from "@/components/SongTimeline";
+import { Badge, Button, Card, Slider, Switch } from "@/components/ui";
+import { acceptSongReview, loadSong, prepareSongs } from "@/lib/actions";
+import { clampTimelineZoom } from "@/lib/editorZoom";
 import { cn, fmtDb, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
-import { SECTION_KINDS, nextLabel, resolveSections, sectionColor } from "@/lib/sections";
+import { beatsPerBar } from "@/lib/meter";
+import { visibleReviewWarnings } from "@/lib/reviewWarnings";
+import { nextLabel, resolveSections } from "@/lib/sections";
+import { barBeatOf, beatToTime, constantGrid, ensureGrid, movePoint, qOf, remapBeatsPerBar, removePoint, resnapSections, setCurve, timeToBeat, type Grid } from "@/lib/tempoMap";
 import { isRolling } from "@/lib/transport";
-import type { AiProposal, Section, Song, TrackInfo, Waveform as WF } from "@/lib/types";
+import type { AiProposal, Section, Song, TrackInfo, TrackRole, Waveform as WF } from "@/lib/types";
 import { useApp, usePlayback } from "@/store/app";
 
-export const KEYS = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
-export const MINOR_KEYS = ["Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"];
-const TIME_SIGS = ["4/4", "3/4", "6/8", "2/4", "12/8", "5/4"];
+interface Hist {
+  sections: Section[];
+  beatOffset: number;
+  bpm: number | null;
+  arrangement: string[];
+  countInBars: number;
+  timeSignature: string;
+  grid: Grid | null;
+}
+
+/** Convert seconds + beat grid → "Bar 3 · Beat 1" string. */
+export function fmtBarBeat(t: number, bpm: number | null, offset: number, beatsPerBar: number): string {
+  if (!bpm || bpm <= 0) return fmtTime(t, true);
+  const beat = 60 / bpm;
+  const beatNum = Math.round((t - offset) / beat);
+  const bar = Math.floor(beatNum / beatsPerBar) + 1;
+  const b = ((beatNum % beatsPerBar) + beatsPerBar) % beatsPerBar + 1;
+  return `Bar ${bar} · Beat ${b}`;
+}
 
 export function SongEditor({ id }: { id: string }) {
   const stored = useApp((s) => s.songs.find((x) => x.id === id));
@@ -30,6 +47,43 @@ export function SongEditor({ id }: { id: string }) {
   const [saving, setSaving] = useState(false);
   const [wave, setWave] = useState<WF | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [snapMode, setSnapMode] = useState<SnapMode>("bar");
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [tempoPoint, setTempoPoint] = useState<string | null>(null);
+  const [drawTempo, setDrawTempo] = useState(false);
+  const [mixOpen, setMixOpen] = useState(false);
+  const [solo, setSolo] = useState<TrackRole | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const zoomAnchor = useRef<{ t: number; x: number } | null>(null);
+  const zoomRef = useRef(1);
+  zoomRef.current = zoom;
+  const past = useRef<Hist[]>([]);
+  const future = useRef<Hist[]>([]);
+  const gridSend = useRef<{ id: string; latest: Grid | null; busy: boolean }>({ id: "", latest: null, busy: false });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const tempoPointRef = useRef(tempoPoint);
+  tempoPointRef.current = tempoPoint;
+  const soloBackup = useRef<TrackInfo[] | null>(null);
+  const renameArmed = useRef<string | null>(null);
+  const actionsRef = useRef({
+    save: () => {},
+    undo: () => {},
+    redo: () => {},
+    tempo: (_e: KeyboardEvent): boolean => false,
+    add: (_t: number) => {},
+    nudge: (_dir: number, _fine: "bar" | "beat" | "ms") => {},
+    remove: () => {},
+    loop: () => {},
+    tapBeat: () => {},
+    zoomSel: () => {},
+    closeMix: () => {},
+    mixOpen: false,
+  });
   const isLoaded = loaded?.songId === id;
   const status = usePlayback((s) => (s.status?.songId === id ? s.status : null));
   const rolling = isRolling(status?.state);
@@ -54,6 +108,87 @@ export function SongEditor({ id }: { id: string }) {
 
   const set = useCallback((patch: Partial<Song>) => setDraft((d) => (d ? { ...d, ...patch } : d)), []);
 
+  const shot = (d: Song): Hist => ({
+    sections: d.sections, beatOffset: d.beatOffset, bpm: d.bpm, arrangement: d.arrangement,
+    countInBars: d.countInBars, timeSignature: d.timeSignature, grid: d.grid ?? null,
+  });
+
+  const pushGrid = useCallback((id: string, grid: Grid) => {
+    const slot = gridSend.current;
+    slot.id = id;
+    slot.latest = grid;
+    if (slot.busy) return;
+    slot.busy = true;
+    const pump = async () => {
+      while (slot.latest) {
+        const songId = slot.id;
+        const g = slot.latest;
+        slot.latest = null;
+        try {
+          const saved = await ipc.setGrid(songId, g);
+          if (!slot.latest && saved) useApp.getState().upsertSong(saved);
+        } catch { /* the next edit sends again */ }
+      }
+      slot.busy = false;
+    };
+    void pump();
+  }, []);
+
+  const writeGrid = useCallback((grid: Grid, toastIt: boolean, persist = true) => {
+    const d = draftRef.current;
+    if (!d) return;
+    const prev = ensureGrid(d);
+    const snapped = resnapSections(d.sections, prev, grid, d.duration);
+    const first = [...grid.points].sort((a, b) => qOf(a.bar, a.beat, grid.beatsPerBar) - qOf(b.bar, b.beat, grid.beatsPerBar))[0];
+    set({ grid, bpm: first?.bpm ?? d.bpm, beatOffset: grid.beat1Sec, sections: snapped.sections });
+    if (toastIt && snapped.moved > 0) toast.message(`${snapped.moved} ${snapped.moved === 1 ? "section" : "sections"} adjusted · Undo`);
+    if (persist) pushGrid(d.id, grid);
+  }, [pushGrid, set]);
+
+  const remember = useCallback(() => {
+    const d = draftRef.current;
+    if (!d) return;
+    past.current.push(shot(d));
+    if (past.current.length > 50) past.current.shift();
+    future.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
+
+  const restore = useCallback((entry: Hist) => {
+    const d = draftRef.current;
+    if (!d) return;
+    set(entry);
+    const grid = entry.grid ?? (entry.bpm != null ? constantGrid(entry.bpm, entry.beatOffset, beatsPerBar(entry.timeSignature), "user") : null);
+    if (grid) pushGrid(d.id, grid);
+    else if (entry.beatOffset !== d.beatOffset) ipc.setDownbeat(d.id, entry.beatOffset).catch(() => {});
+  }, [pushGrid, set]);
+
+  const undo = useCallback(() => {
+    const prev = past.current.pop();
+    setCanUndo(past.current.length > 0);
+    const d = draftRef.current;
+    if (!prev || !d) return;
+    future.current.push(shot(d));
+    setCanRedo(true);
+    restore(prev);
+  }, [restore]);
+
+  const redo = useCallback(() => {
+    const next = future.current.pop();
+    setCanRedo(future.current.length > 0);
+    const d = draftRef.current;
+    if (!next || !d) return;
+    past.current.push(shot(d));
+    setCanUndo(true);
+    restore(next);
+  }, [restore]);
+
+  const edit = useCallback((patch: Partial<Song>) => {
+    remember();
+    set(patch);
+  }, [remember, set]);
+
   const save = useCallback(async (d = draft): Promise<Song | null> => {
     if (!d) return null;
     setSaving(true);
@@ -76,19 +211,143 @@ export function SongEditor({ id }: { id: string }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const inInput = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      const a = actionsRef.current;
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
-        save();
+        a.save();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && e.shiftKey && !inInput) {
+        e.preventDefault();
+        a.redo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey && !inInput) {
+        e.preventDefault();
+        a.undo();
+        return;
+      }
+      if (e.key === "Escape" && a.mixOpen) {
+        a.closeMix();
+        return;
+      }
+      if (inInput || e.metaKey || e.ctrlKey || e.repeat) return;
+      if (a.tempo(e)) return;
+      if (e.key === "m") {
+        e.preventDefault();
+        const pos = usePlayback.getState().status?.position ?? 0;
+        const loadedHere = useApp.getState().loaded?.songId === draftRef.current?.id;
+        if (!loadedHere && pos < 0.05) {
+          toast.message("Play the song, then press M at the playhead");
+          return;
+        }
+        a.add(pos);
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        a.remove();
+      } else if (e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        a.loop();
+      } else if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        a.tapBeat();
+      } else if (e.key === "z" || e.key === "Z") {
+        e.preventDefault();
+        a.zoomSel();
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const fine = e.shiftKey ? "ms" : e.altKey ? "beat" : "bar";
+        a.nudge(e.key === "ArrowLeft" ? -1 : 1, fine);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [save]);
+  }, []);
 
   const sections = useMemo(() => (draft ? resolveSections(draft) : []), [draft]);
-  if (!draft) return <div className="p-10 text-muted">Song not found.</div>;
+
+  const selectSection = useCallback((id: string) => setSelected(id), []);
 
   const playhead = status?.position ?? 0;
+
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const duration = draft?.duration ?? 0;
+    if (!el || duration <= 0) return;
+    if (zoomAnchor.current) {
+      const { t, x } = zoomAnchor.current;
+      zoomAnchor.current = null;
+      el.scrollLeft = Math.max(0, (t / duration) * el.scrollWidth - x);
+      return;
+    }
+    if (rolling && zoom > 1) {
+      el.scrollLeft = Math.max(0, (playhead / duration) * el.scrollWidth - el.clientWidth * 0.32);
+    }
+  }, [zoom, playhead, rolling, draft?.duration]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    const duration = draft?.duration ?? 0;
+    if (!el) return;
+    const zoomAt = (clientX: number, nextZoom: number) => {
+      const rect = el.getBoundingClientRect();
+      const x = Math.max(0, clientX - rect.left);
+      const t = duration > 0 && el.scrollWidth > 0 ? ((el.scrollLeft + x) / el.scrollWidth) * duration : 0;
+      const next = clampTimelineZoom(nextZoom);
+      if (Math.abs(next - zoomRef.current) < 0.01) return;
+      zoomAnchor.current = { t, x };
+      zoomRef.current = next;
+      setZoom(next);
+    };
+    // Pinch (WebKit gesture events, and ctrl+wheel elsewhere). A vertical
+    // two-finger slide zooms too. A sideways slide is left alone so it pans.
+    let pinching = false;
+    let gestureBase = 1;
+    const onWheel = (e: WheelEvent) => {
+      if (pinching && e.ctrlKey) {
+        e.preventDefault();
+        return;
+      }
+      const pinch = e.ctrlKey || e.metaKey;
+      const vertical = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+      if (!pinch && !vertical) return;
+      e.preventDefault();
+      let dy = e.deltaY;
+      if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) dy *= 16;
+      else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) dy *= el.clientHeight;
+      const gain = pinch ? 0.01 : 0.0018;
+      zoomAt(e.clientX, zoomRef.current * Math.exp(-dy * gain));
+    };
+    const startGesture = (e: Event) => {
+      e.preventDefault();
+      pinching = true;
+      gestureBase = zoomRef.current;
+    };
+    const changeGesture = (e: Event) => {
+      e.preventDefault();
+      const g = e as Event & { scale: number; clientX: number };
+      if (!(g.scale > 0)) return;
+      zoomAt(g.clientX, gestureBase * g.scale);
+    };
+    const endGesture = () => {
+      pinching = false;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", startGesture, { passive: false });
+    el.addEventListener("gesturechange", changeGesture, { passive: false });
+    el.addEventListener("gestureend", endGesture);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", startGesture);
+      el.removeEventListener("gesturechange", changeGesture);
+      el.removeEventListener("gestureend", endGesture);
+    };
+  }, [draft?.duration]);
+
+  if (!draft) return <div className="p-10 text-muted">Song not found.</div>;
+
   const ensureLoaded = async () => (isLoaded ? loaded : await loadSong(id, "rehearsal"));
   const playPause = async () => {
     if (dirty) await save();
@@ -101,17 +360,48 @@ export function SongEditor({ id }: { id: string }) {
     ipc.seek(t);
   };
 
+  const focusTime = (t: number, nextZoom = zoom) => {
+    const el = scroller.current;
+    if (!el || draft.duration <= 0) return;
+    const x = el.clientWidth * 0.32;
+    const z = clampTimelineZoom(nextZoom);
+    if (z !== zoom) {
+      zoomAnchor.current = { t, x };
+      setZoom(z);
+      return;
+    }
+    el.scrollLeft = Math.max(0, (t / draft.duration) * el.scrollWidth - x);
+  };
+
   const needsRender = !!draft.stems.other && !!draft.analysis?.renderedWith && !samePrep(draft.analysis.renderedWith, draft.prep);
   const hasStems = !!draft.stems.other && !!draft.stems.bass && !!draft.stems.drums;
-  const notPrepared = draft.status === "imported" || draft.status === "error";
-
   const applyProposal = async (p: AiProposal) => {
-    const next: Song = { ...draft, prep: p.prep ?? draft.prep, routing: p.routing ?? draft.routing, arrangement: p.arrangement ?? draft.arrangement };
+    const t = p.timeline;
+    const patched: Song = {
+      ...draft,
+      prep: p.prep ?? draft.prep,
+      routing: p.routing ?? draft.routing,
+      arrangement: p.arrangement ?? draft.arrangement,
+      ...(t?.countInBars != null ? { countInBars: t.countInBars } : {}),
+      ...(t?.cueLeadBeats != null ? { cueLeadBeats: t.cueLeadBeats } : {}),
+      ...(t?.key ? { key: t.key } : {}),
+    };
+    const next = withTempo(patched, { bpm: t?.bpm, beatOffset: t?.beatOffset, timeSignature: t?.timeSignature });
     setDraft(next);
     const saved = await save(next);
-    if (saved && p.requiresRerender) {
-      if (hasStems) await rerender(saved);
-      else prepareSongs([saved.id]);
+    if (!saved) return;
+    let current = saved;
+    if (t?.beatOffset != null && !next.grid) {
+      try {
+        current = await ipc.setDownbeat(saved.id, t.beatOffset);
+        useApp.getState().upsertSong(current);
+        lastStored.current = current;
+        setDraft(current);
+      } catch { /* save already stored the offset */ }
+    }
+    if (p.requiresRerender) {
+      if (hasStems) await rerender(current);
+      else prepareSongs([current.id]);
     }
     toast.success("Applied");
   };
@@ -131,245 +421,514 @@ export function SongEditor({ id }: { id: string }) {
   };
 
   const addSectionAt = (t: number) => {
+    let start = Math.max(0, Math.min(draft.duration || t, t));
+    const g = ensureGrid(draft);
+    if (g && snapMode !== "off") {
+      let q = timeToBeat(g, start);
+      q = snapMode === "bar" ? Math.round(q / g.beatsPerBar) * g.beatsPerBar : Math.round(q);
+      start = beatToTime(g, q);
+    }
+    start = Math.max(0, Math.min(draft.duration || start, Math.round(start * 1000) / 1000));
+    if (draft.sections.some((s) => Math.abs(s.start - start) < 0.02)) start = Math.min(draft.duration, start + 0.05);
     const kind = guessNextKind(draft.sections);
-    const s: Section = { id: crypto.randomUUID(), label: nextLabel(draft.sections, kind), kind, start: Math.round(t * 100) / 100 };
+    const s: Section = { id: crypto.randomUUID(), label: nextLabel(draft.sections, kind), kind, start };
+    remember();
     set({ sections: [...draft.sections, s].sort((a, b) => a.start - b.start) });
     setSelected(s.id);
   };
 
   const snapToBars = () => {
-    if (!draft.bpm) return toast.warning("Set a BPM first");
-    const beats = Number(draft.timeSignature.split("/")[0]) || 4;
-    const bar = (60 / draft.bpm) * beats;
-    set({ sections: draft.sections.map((s, i) => (i === 0 ? s : { ...s, start: Math.max(0, Math.round((s.start - draft.beatOffset) / bar) * bar + draft.beatOffset) })) });
+    const g = ensureGrid(draft);
+    if (!g) return toast.warning("Set a BPM first");
+    remember();
+    set({
+      sections: draft.sections.map((s, i) => {
+        if (i === 0) return s;
+        const q = Math.round(timeToBeat(g, s.start) / g.beatsPerBar) * g.beatsPerBar;
+        return { ...s, start: Math.max(0, Math.round(beatToTime(g, q) * 1000) / 1000) };
+      }),
+    });
     toast.success("Section markers snapped to bars");
   };
 
+  const moveSectionStart = (sectionId: string, t: number) => {
+    const start = Math.round(t * 1000) / 1000;
+    const cur = draft.sections.find((s) => s.id === sectionId);
+    if (!cur || Math.abs(cur.start - start) < 0.0005) return;
+    remember();
+    set({ sections: draft.sections.map((s) => (s.id === sectionId ? { ...s, start } : s)).sort((a, b) => a.start - b.start) });
+  };
+
+  const commitBeat = (t: number) => {
+    const hi = draft.duration > 0 ? draft.duration : t;
+    const v = Math.max(0, Math.min(hi, Math.round(t * 1000) / 1000));
+    if (Math.abs(v - draft.beatOffset) < 0.0005) return;
+    const g = ensureGrid(draft);
+    remember();
+    if (g) writeGrid({ ...g, beat1Sec: v, source: "user" }, true);
+    else {
+      set({ beatOffset: v });
+      ipc.setDownbeat(draft.id, v).catch(() => {});
+    }
+  };
+
+  const commitBpm = (bpm: number) => {
+    const v = Math.round(Math.min(300, Math.max(30, bpm)) * 1000) / 1000;
+    const g = ensureGrid(draft.bpm == null ? { ...draft, bpm: v } : draft);
+    if (!g) return;
+    const first = [...g.points].sort((a, b) => qOf(a.bar, a.beat, g.beatsPerBar) - qOf(b.bar, b.beat, g.beatsPerBar))[0];
+    if (!first || Math.abs(first.bpm - v) < 0.0005) return;
+    remember();
+    writeGrid({ ...g, source: "user", points: g.points.map((p) => (p.id === first.id ? { ...p, bpm: v } : p)) }, true);
+  };
+
+  const applyMeter = (timeSignature: string) => {
+    const d = draftRef.current;
+    if (!d || d.timeSignature === timeSignature) return;
+    const g = ensureGrid(d);
+    remember();
+    if (!g) {
+      set({ timeSignature });
+      return;
+    }
+    const grid = remapBeatsPerBar(g, beatsPerBar(timeSignature));
+    const snapped = resnapSections(d.sections, g, grid, d.duration);
+    const first = [...grid.points].sort((a, b) => qOf(a.bar, a.beat, grid.beatsPerBar) - qOf(b.bar, b.beat, grid.beatsPerBar))[0];
+    set({ timeSignature, grid, bpm: first?.bpm ?? d.bpm, beatOffset: grid.beat1Sec, sections: snapped.sections });
+    if (snapped.moved > 0) toast.message(`${snapped.moved} ${snapped.moved === 1 ? "section" : "sections"} adjusted · Undo`);
+    pushGrid(d.id, grid);
+  };
+
+  const removeSelected = () => {
+    if (!selected) return;
+    remember();
+    set({ sections: draft.sections.filter((s) => s.id !== selected), arrangement: draft.arrangement.filter((a) => a !== selected) });
+    setSelected(null);
+  };
+
+  const nudgeSelected = (dir: number, fine: "bar" | "beat" | "ms") => {
+    if (!selected) return;
+    const sorted = [...draft.sections].sort((a, b) => a.start - b.start);
+    const idx = sorted.findIndex((s) => s.id === selected);
+    if (idx <= 0) return;
+    const g = ensureGrid(draft);
+    let step = 0.05;
+    if (fine !== "ms" && g) {
+      const q = timeToBeat(g, sorted[idx].start);
+      const next = q + dir * (fine === "beat" ? 1 : g.beatsPerBar);
+      step = Math.abs(beatToTime(g, next) - sorted[idx].start);
+    } else if (fine !== "ms" && draft.bpm) {
+      const beat = 60 / draft.bpm;
+      step = fine === "beat" ? beat : beat * beatsPerBar(draft.timeSignature);
+    }
+    const min = sorted[idx - 1].start + 0.05;
+    const max = (sorted[idx + 1]?.start ?? draft.duration) - 0.05;
+    const start = Math.max(min, Math.min(max, Math.round((sorted[idx].start + dir * step) * 1000) / 1000));
+    if (Math.abs(start - sorted[idx].start) < 0.0005) return;
+    remember();
+    set({ sections: draft.sections.map((s) => (s.id === selected ? { ...s, start } : s)).sort((a, b) => a.start - b.start) });
+  };
+
+  const muteRole = async (role: TrackRole, muted: boolean) => {
+    const info = await ensureLoaded();
+    if (!info) return;
+    const t = info.tracks.find((x) => x.role === role);
+    if (!t) return toast.message("Prepare the song to separate this stem");
+    const tracks = info.tracks.map((x) => (x.role === role ? { ...x, muted } : x));
+    useApp.getState().setLoaded({ ...info, tracks });
+    ipc.setTrack(role, t.gainDb, muted).catch((e) => toast.error(errMsg(e)));
+  };
+
+  const soloRole = async (role: TrackRole | null) => {
+    const info = await ensureLoaded();
+    if (!info) return;
+    const musical: TrackRole[] = ["drums", "bass", "other", "vocals"];
+    if (role == null) {
+      const prev = soloBackup.current;
+      soloBackup.current = null;
+      setSolo(null);
+      if (!prev) return;
+      const tracks = info.tracks.map((t) => {
+        const old = prev.find((p) => p.role === t.role);
+        return old ? { ...t, muted: old.muted } : t;
+      });
+      useApp.getState().setLoaded({ ...info, tracks });
+      await Promise.all(tracks.filter((t) => musical.includes(t.role)).map((t) => ipc.setTrack(t.role, t.gainDb, t.muted)));
+      return;
+    }
+    if (!info.tracks.some((t) => t.role === role)) return toast.message("Prepare the song to separate this stem");
+    if (!soloBackup.current) soloBackup.current = info.tracks.map((t) => ({ ...t }));
+    const tracks = info.tracks.map((t) => (musical.includes(t.role) ? { ...t, muted: t.role !== role } : t));
+    setSolo(role);
+    useApp.getState().setLoaded({ ...info, tracks });
+    await Promise.all(tracks.filter((t) => musical.includes(t.role)).map((t) => ipc.setTrack(t.role, t.gainDb, t.muted)));
+  };
+
+  const setClickOn = async (on: boolean) => {
+    const info = await ensureLoaded();
+    if (!info) return;
+    if (on && !info.clickAvailable) return toast.warning("Click needs a BPM");
+    useApp.getState().setLoaded({ ...info, clickEnabled: on });
+    ipc.setClick(on).catch((e) => toast.error(errMsg(e)));
+  };
+
+  const setCueOn = async (on: boolean) => {
+    const info = await ensureLoaded();
+    if (!info) return;
+    useApp.getState().setLoaded({ ...info, cueEnabled: on });
+    ipc.setCue(on).catch((e) => toast.error(errMsg(e)));
+  };
+
+  actionsRef.current = {
+    save: () => { void save(); },
+    undo,
+    redo,
+    tempo: (e) => {
+      const d = draftRef.current;
+      const g = d ? ensureGrid(d) : null;
+      if (e.key === "b" || e.key === "B") {
+        e.preventDefault();
+        setDrawTempo((v) => !v);
+        return true;
+      }
+      const id = tempoPointRef.current;
+      if (!g || !id) return false;
+      const points = [...g.points].sort((a, b) => qOf(a.bar, a.beat, g.beatsPerBar) - qOf(b.bar, b.beat, g.beatsPerBar));
+      const i = points.findIndex((p) => p.id === id);
+      const p = points[i];
+      if (!p) return false;
+      if (e.key === "Escape") {
+        setTempoPoint(null);
+        return true;
+      }
+      if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        remember();
+        writeGrid(setCurve(g, id, p.curve === "linear" ? "step" : "linear"), true);
+        return true;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        const next = removePoint(g, id);
+        if (!next) toast.message("Beat 1 keeps its tempo. Delete a later point.");
+        else {
+          remember();
+          writeGrid(next, true);
+          setTempoPoint(null);
+        }
+        return true;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const n = points[(i + (e.shiftKey ? points.length - 1 : 1)) % points.length];
+        setTempoPoint(n.id);
+        return true;
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const step = e.shiftKey ? 0.01 : 0.1;
+        remember();
+        writeGrid(movePoint(g, id, { bpm: p.bpm + (e.key === "ArrowUp" ? step : -step) }), true);
+        return true;
+      }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        if (i === 0) return true;
+        const dir = e.key === "ArrowLeft" ? -1 : 1;
+        let q = qOf(p.bar, p.beat, g.beatsPerBar);
+        if (e.altKey) q += dir * g.beatsPerBar;
+        else if (e.shiftKey) q += dir / 16;
+        else q += dir;
+        const pos = barBeatOf(q, g.beatsPerBar);
+        remember();
+        writeGrid(movePoint(g, id, { bar: pos.bar, beat: pos.beat }), true);
+        return true;
+      }
+      return false;
+    },
+    add: addSectionAt,
+    nudge: nudgeSelected,
+    remove: removeSelected,
+    loop: () => { void (async () => { if (!(await ensureLoaded())) return; ipc.loop(!(usePlayback.getState().status?.looping)); })(); },
+    tapBeat: () => { void (async () => { if (!(await ensureLoaded())) return; commitBeat(usePlayback.getState().status?.position ?? 0); })(); },
+    zoomSel: () => {
+      const sec = sections.find((s) => s.id === selected);
+      if (!sec || draft.duration <= 0) return;
+      const span = Math.max(0.5, sec.end - sec.start);
+      focusTime(sec.start, clampTimelineZoom(Math.max(1, (draft.duration / span) * 0.85)));
+    },
+    closeMix: () => setMixOpen(false),
+    mixOpen,
+  };
+
+  const activeSectionId = isLoaded && status ? loaded?.segments[status.segmentIndex]?.sectionId ?? null : null;
+  const review = useMemo(() => visibleReviewWarnings(draft), [draft]);
+  const loopRegion = status?.looping && isLoaded && loaded
+    ? (() => {
+        const seg = loaded.segments[status.segmentIndex];
+        return seg ? { start: seg.start, end: seg.end } : null;
+      })()
+    : null;
+
   return (
-    <div className="pb-12">
-      {/* header */}
-      <div className="drag sticky top-0 z-20 border-b border-line/70 bg-bg/90 px-8 pt-6 pb-4 backdrop-blur-md">
-        <div className="no-drag flex items-center gap-4">
-          <IconButton label="Back" onClick={back}><ArrowLeft className="size-4" /></IconButton>
-          <div className="min-w-0 flex-1">
-            <input className="w-full truncate bg-transparent text-[1.5rem] font-semibold tracking-tight outline-none placeholder:text-faint" value={draft.title}
-              onChange={(e) => set({ title: e.target.value })} placeholder="Song title" />
-            <div className="flex items-center gap-3">
-              <input className="w-64 bg-transparent text-sm text-muted outline-none placeholder:text-faint" value={draft.artist}
-                onChange={(e) => set({ artist: e.target.value })} placeholder="Artist" />
-              <SongStatusBadge song={draft} />
-              {draft.analysis?.separator && (
-                <span className="text-xs text-faint">Prepared with {draft.analysis.separator.engine} on {draft.analysis.separator.device} · {Math.round(draft.analysis.separator.seconds)} s</span>
-              )}
+    <div className="relative flex h-full min-h-0 flex-col">
+      {draft.lastError && <div className="shrink-0 border-b border-err/30 bg-err/10 px-4 py-2 text-xs text-err">{draft.lastError}</div>}
+      {draft.status === "warning" && (review.active.length > 0 || review.stale.length > 0) && (
+        <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-warn/30 bg-warn/10 px-4 py-2.5">
+          <div className="min-w-0 text-xs">
+            <div className="font-semibold text-fg">Needs review</div>
+            {review.active.length > 0 && <div className="mt-0.5 text-warn">{review.active.join(" · ")}</div>}
+            {review.stale.length > 0 && (
+              <p className="mt-1 text-faint">Superseded after your tempo map edits: {review.stale.join(" · ")}</p>
+            )}
+            <p className="mt-1 max-w-xl text-fg-2">The song can still play. Listen with the click on. If the tempo already sits with the band, confirm it — Re-analyze only updates this when a new tempo is detected.</p>
+          </div>
+          <Button size="sm" variant="outline" className="shrink-0" onClick={async () => {
+            try {
+              const s = await acceptSongReview(draft.id);
+              lastStored.current = s;
+              setDraft(s);
+              toast.success(s.status === "ready" ? "Marked live-ready" : "Saved — something else still needs a look");
+            } catch (e) {
+              toast.error("Could not update status", { description: errMsg(e) });
+            }
+          }}>{review.active.length === 0 || review.active.every((w) => /bpm|tempo|uncertain|confidence|verify/i.test(w)) ? "Tempo is correct" : "I've checked this"}</Button>
+        </div>
+      )}
+      <SongTimeline
+        song={draft}
+        sections={sections}
+        wave={wave}
+        playhead={playhead}
+        rolling={rolling}
+        loaded={isLoaded}
+        looping={!!status?.looping}
+        loopRegion={loopRegion}
+        zoom={zoom}
+        scrollerRef={scroller}
+        selectedId={selected}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        tempoPoint={tempoPoint}
+        drawTempo={drawTempo}
+        snap={snapMode}
+        saving={saving}
+        dirty={dirty}
+        tracks={isLoaded && loaded ? loaded.tracks : []}
+        clickOn={isLoaded ? !!loaded?.clickEnabled : draft.routing.clickEnabled}
+        cueOn={isLoaded ? !!loaded?.cueEnabled : draft.routing.cueEnabled}
+        preparing={draft.status === "processing" || draft.status === "queued"}
+        activeSectionId={activeSectionId}
+        solo={solo}
+        actions={{
+          onBack: () => {
+            if (!dirty) { back(); return; }
+            if (window.confirm("Save changes before leaving?")) {
+              void save().then((s) => { if (s) back(); });
+            }
+          },
+          onTitle: (title) => set({ title }),
+          onArtist: (artist) => set({ artist }),
+          onPlay: () => { void playPause(); },
+          onStop: () => { void ipc.stop(); },
+          onLoop: () => { void (async () => { if (!(await ensureLoaded())) return; ipc.loop(!usePlayback.getState().status?.looping); })(); },
+          onSeek: (t) => { void seek(t); },
+          onSelect: selectSection,
+          onAddSection: addSectionAt,
+          onMoveSection: moveSectionStart,
+          onRename: (id, label) => set({ sections: draft.sections.map((s) => (s.id === id ? { ...s, label } : s)) }),
+          onRenameFocus: (id) => {
+            if (renameArmed.current === id) return;
+            renameArmed.current = id;
+            remember();
+          },
+          onKind: (id, kind) => {
+            if (renameArmed.current !== id) remember();
+            set({ sections: draft.sections.map((s) => (s.id === id ? { ...s, kind } : s)) });
+          },
+          onDelete: removeSelected,
+          onMoveBeat: commitBeat,
+          onBpm: commitBpm,
+          onKey: (key) => edit({ key }),
+          onTimeSignature: applyMeter,
+          onCountIn: (countInBars) => edit({ countInBars }),
+          onUndo: undo,
+          onRedo: redo,
+          onTempoStart: remember,
+          onTempo: (grid) => writeGrid(grid, false, false),
+          onTempoEnd: (grid) => writeGrid(grid, true),
+          onTempoPoint: (id) => { setTempoPoint(id); if (id) setSelected(null); },
+          onToggleTempoCurve: () => {
+            const d = draftRef.current;
+            const g = d ? ensureGrid(d) : null;
+            if (!g) return;
+            const id = tempoPointRef.current ?? g.points[0]?.id;
+            const p = g.points.find((x) => x.id === id);
+            if (!id || !p) return;
+            remember();
+            writeGrid(setCurve(g, id, p.curve === "linear" ? "step" : "linear"), true);
+          },
+          onSnap: () => setSnapMode((m) => (m === "bar" ? "beat" : m === "beat" ? "off" : "bar")),
+          onSnapAll: snapToBars,
+          onSave: () => { void save(); },
+          onRevert: () => {
+            if (!stored) return;
+            setDraft(stored);
+            past.current = [];
+            future.current = [];
+            setCanUndo(false);
+            setCanRedo(false);
+            const g = stored.grid ?? (stored.bpm != null ? constantGrid(stored.bpm, stored.beatOffset, beatsPerBar(stored.timeSignature), "user") : null);
+            if (g) pushGrid(stored.id, g);
+          },
+          onDone: () => { void (async () => { if (dirty) await save(); back(); })(); },
+          onPrepare: () => { void (async () => { if (dirty) await save(); prepareSongs([draft.id]); })(); },
+          onMix: () => setMixOpen(true),
+          onMute: (role, muted) => { void muteRole(role, muted); },
+          onSolo: (role) => { void soloRole(role); },
+          onClickToggle: (on) => { void setClickOn(on); },
+          onCueToggle: (on) => { void setCueOn(on); },
+          onZoom: focusTime,
+        }}
+      />
+      {mixOpen && (
+        <div className="absolute inset-0 z-40 flex justify-end bg-black/45" onClick={() => setMixOpen(false)}>
+          <div className="flex h-full w-[min(40rem,100%)] flex-col border-l border-line bg-bg shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold">Song settings</div>
+                <div className="text-xs text-muted">Count-in, backing, monitor, arrangement, and the assistant</div>
+              </div>
+              <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={() => setMixOpen(false)}>Close</Button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
+              <Card title="Notes for the band">
+                <textarea className="field min-h-24 text-sm" placeholder="e.g. Count-in 2 bars. Bridge soft, then build."
+                  value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
+              </Card>
+              <CountInSettings draft={draft} set={edit} />
+              <Card title="Live arrangement" subtitle="Order the band will play. Repeats and skips jump sample-accurately — no re-render needed.">
+                <ArrangementEditor sections={sections} value={draft.arrangement} onChange={(arrangement) => edit({ arrangement })} />
+              </Card>
+              <Card title="Backing track" subtitle="What plays in FOH"
+                actions={needsRender ? <Badge tone="warn">Needs render</Badge> : draft.rendered.backing ? <Badge tone="ok">Rendered</Badge> : null}>
+                <PresetPicker value={draft.prep} presets={presets}
+                  onPick={(p) => set({ prep: { ...p.settings, presetId: p.id }, routing: { ...draft.routing, clickEnabled: p.settings.click, cueEnabled: p.settings.cue } })} />
+                <div className="my-4 h-px bg-line" />
+                <StemControls value={draft.prep} onChange={(prep) => set({ prep, routing: { ...draft.routing, clickEnabled: prep.click, cueEnabled: prep.cue } })} />
+                {needsRender && (
+                  <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-warn/30 bg-warn/[0.07] px-3 py-2.5">
+                    <span className="text-xs text-fg-2">Stem settings changed. Re-render takes a few seconds.</span>
+                    <Button size="sm" variant="primary" onClick={() => rerender()}>Re-render</Button>
+                  </div>
+                )}
+                {!hasStems && draft.status !== "processing" && (
+                  <p className="mt-3 text-xs text-muted">Stems are created when the song is prepared. Until then, live playback uses the original file.</p>
+                )}
+              </Card>
+              <Card title="Monitor" subtitle="Click, cues and guide vocal never reach FOH">
+                <div className="space-y-3">
+                  <ToggleRow label="Guide vocal in monitor" hint="Separated vocals for the singers" checked={draft.routing.guideVocalToMonitor} disabled={!draft.stems.vocals}
+                    onChange={(v) => set({ routing: { ...draft.routing, guideVocalToMonitor: v } })} tone="mon" />
+                  <ToggleRow label="Backing track to FOH" hint="Turn off for monitor-only songs" checked={draft.routing.backingToFoh}
+                    onChange={(v) => set({ routing: { ...draft.routing, backingToFoh: v } })} />
+                  <ToggleRow label="Backing track in monitor" hint="Band hears the track in their in-ears" checked={draft.routing.backingToMonitor}
+                    onChange={(v) => set({ routing: { ...draft.routing, backingToMonitor: v } })} tone="mon" />
+                </div>
+              </Card>
+              {isLoaded && loaded && <RehearsalMixer tracks={loaded.tracks} />}
+              <Card title="Ask the assistant" subtitle="Local Ollama · suggestions only, you confirm">
+                <AiAssistant
+                  placeholder="e.g. “count-in 2 bar” or “geser downbeat ke awal musik”"
+                  examples={["Drummer tidak main, bassist main", "Count-in 2 bar", "Geser downbeat ke awal musik", "Pakai tempo yang lebih cepat"]}
+                  run={async (text) => {
+                    if (dirty) await save();
+                    return ipc.aiSong(draft.id, text);
+                  }}
+                  onApply={applyProposal}
+                />
+              </Card>
             </div>
           </div>
-          {dirty && (
-            <>
-              <span className="text-xs text-warn">Unsaved changes</span>
-              <Button variant="ghost" icon={<RotateCcw className="size-4" />} onClick={() => stored && setDraft(stored)}>Revert</Button>
-            </>
-          )}
-          <Button variant={dirty ? "primary" : "secondary"} icon={<Save className="size-4" />} loading={saving} disabled={!dirty} onClick={() => save()}>Save</Button>
-          <Button
-            variant={notPrepared ? "primary" : "outline"}
-            icon={draft.status === "processing" || draft.status === "queued" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            disabled={draft.status === "processing" || draft.status === "queued"}
-            onClick={async () => { if (dirty) await save(); prepareSongs([draft.id]); }}
-          >
-            {notPrepared ? "Prepare song" : draft.status === "processing" || draft.status === "queued" ? "Preparing…" : "Prepare again"}
-          </Button>
         </div>
-        {draft.lastError && <div className="no-drag mt-3 rounded-lg border border-err/30 bg-err/10 px-3 py-2 text-xs text-err">{draft.lastError}</div>}
-        {(draft.analysis?.warnings?.length ?? 0) > 0 && draft.status === "warning" && (
-          <div className="no-drag mt-3 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">{draft.analysis!.warnings!.join(" · ")}</div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-12 gap-5 px-8 pt-5">
-        <div className="col-span-12 space-y-5 2xl:col-span-8 xl:col-span-7">
-          {/* waveform + transport */}
-          <Card className="overflow-hidden">
-            <div className="mb-3 flex items-center gap-2">
-              <IconButton label={rolling ? "Pause" : "Rehearse from playhead"} size="lg" variant="secondary" className={cn("rounded-full", rolling && "bg-accent text-accent-ink hover:bg-accent-2")} onClick={playPause}>
-                {rolling ? <Pause className="size-5" fill="currentColor" /> : <Play className="size-5 translate-x-px" fill="currentColor" />}
-              </IconButton>
-              <IconButton label="Stop" onClick={() => ipc.stop()} disabled={!isLoaded}><Square className="size-4" fill="currentColor" /></IconButton>
-              <span className="tnum ml-1 text-lg font-semibold">{fmtTime(playhead, true)}</span>
-              <span className="tnum text-sm text-muted">/ {fmtTime(draft.duration)}</span>
-              {isLoaded && <Badge tone="mon" className="ml-2"><Headphones className="size-3" />{loaded?.source}</Badge>}
-              <div className="flex-1" />
-              <Tip label="Add a section marker at the playhead">
-                <Button size="sm" variant="outline" icon={<Plus className="size-3.5" />} onClick={() => addSectionAt(playhead)}>Marker at playhead</Button>
-              </Tip>
-              <Tip label="Move every marker to the nearest bar line">
-                <Button size="sm" variant="ghost" icon={<Magnet className="size-3.5" />} onClick={snapToBars} disabled={!draft.bpm || draft.sections.length < 2}>Snap to bars</Button>
-              </Tip>
-            </div>
-            <Waveform
-              data={wave}
-              duration={draft.duration}
-              sections={draft.sections.length ? sections : []}
-              position={isLoaded ? playhead : undefined}
-              height={150}
-              onSeek={seek}
-              onMoveMarker={(sid, t) => set({ sections: draft.sections.map((s) => (s.id === sid ? { ...s, start: Math.round(t * 100) / 100 } : s)).sort((a, b) => a.start - b.start) })}
-              onSelectSection={setSelected}
-              selectedId={selected}
-              activeSectionId={isLoaded && status ? loaded?.segments[status.segmentIndex]?.sectionId : null}
-              beatGrid={draft.bpm ? { bpm: draft.bpm, offset: draft.beatOffset, beatsPerBar: Number(draft.timeSignature.split("/")[0]) || 4 } : null}
-            />
-            <p className="mt-2 text-xs text-faint">Click to seek · drag boundaries to adjust · bar lines follow BPM and downbeat offset</p>
-          </Card>
-
-          {/* sections */}
-          <Card title="Sections" subtitle="Used for cues, the live timeline and jumps"
-            actions={<Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => addSectionAt(draft.sections.length ? Math.min(draft.duration - 1, playhead || (draft.sections.at(-1)!.start + 10)) : 0)}>Add</Button>}>
-            {draft.sections.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-line-2 px-4 py-6 text-center text-sm text-muted">
-                No sections yet. Prepare the song to detect them, or add markers while listening.
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {sections.map((s, i) => (
-                  <div key={s.id} onClick={() => setSelected(s.id)}
-                    className={cn("grid grid-cols-[0.5rem_minmax(0,1fr)_9rem_6.5rem_2rem_2rem] items-center gap-2.5 rounded-lg px-2 py-1.5", selected === s.id ? "bg-white/[0.05]" : "hover:bg-white/[0.025]")}>
-                    <span className="h-6 w-1.5 rounded-full" style={{ background: sectionColor(s.kind) }} />
-                    <input className="field h-8 text-sm" value={s.label} onChange={(e) => set({ sections: draft.sections.map((x) => (x.id === s.id ? { ...x, label: e.target.value } : x)) })} />
-                    <select className="field h-8 text-sm" value={s.kind} onChange={(e) => set({ sections: draft.sections.map((x) => (x.id === s.id ? { ...x, kind: e.target.value } : x)) })}>
-                      {SECTION_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
-                    </select>
-                    <TimeInput value={s.start} disabled={i === 0} onChange={(t) => set({ sections: draft.sections.map((x) => (x.id === s.id ? { ...x, start: t } : x)).sort((a, b) => a.start - b.start) })} />
-                    <IconButton size="sm" label="Set to playhead" disabled={i === 0 || !isLoaded}
-                      onClick={(e) => { e.stopPropagation(); set({ sections: draft.sections.map((x) => (x.id === s.id ? { ...x, start: Math.round(playhead * 100) / 100 } : x)).sort((a, b) => a.start - b.start) }); }}>
-                      <Crosshair className="size-3.5" />
-                    </IconButton>
-                    <IconButton size="sm" label="Delete section"
-                      onClick={(e) => { e.stopPropagation(); set({ sections: draft.sections.filter((x) => x.id !== s.id), arrangement: draft.arrangement.filter((a) => a !== s.id) }); }}>
-                      <Trash2 className="size-3.5" />
-                    </IconButton>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-
-          {/* arrangement */}
-          <Card title="Live arrangement" subtitle="Order the band will play. Repeats and skips jump sample-accurately — no re-render needed.">
-            <ArrangementEditor sections={sections} value={draft.arrangement} onChange={(arrangement) => set({ arrangement })} />
-          </Card>
-
-          <Card title="Notes for the band">
-            <textarea className="field min-h-24 text-sm" placeholder="e.g. Bridge 2× soft, then build. Key change after last chorus is played live."
-              value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
-          </Card>
-        </div>
-
-        <div className="col-span-12 space-y-5 2xl:col-span-4 xl:col-span-5">
-          <SongInfo draft={draft} set={set} playhead={isLoaded ? playhead : null} />
-
-          <Card title="Backing track" subtitle="What plays in FOH"
-            actions={needsRender ? <Badge tone="warn">Needs render</Badge> : draft.rendered.backing ? <Badge tone="ok">Rendered</Badge> : null}>
-            <PresetPicker value={draft.prep} presets={presets}
-              onPick={(p) => set({ prep: { ...p.settings, presetId: p.id }, routing: { ...draft.routing, clickEnabled: p.settings.click, cueEnabled: p.settings.cue } })} />
-            <div className="my-4 h-px bg-line" />
-            <StemControls value={draft.prep} onChange={(prep) => set({ prep, routing: { ...draft.routing, clickEnabled: prep.click, cueEnabled: prep.cue } })} />
-            {needsRender && (
-              <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-warn/30 bg-warn/[0.07] px-3 py-2.5">
-                <span className="text-xs text-fg-2">Stem settings changed. Re-render takes a few seconds.</span>
-                <Button size="sm" variant="primary" onClick={() => rerender()}>Re-render</Button>
-              </div>
-            )}
-            {!hasStems && draft.status !== "processing" && (
-              <p className="mt-3 text-xs text-muted">Stems are created when the song is prepared. Until then, live playback uses the original file.</p>
-            )}
-          </Card>
-
-          <Card title="Monitor" subtitle="Click, cues and guide vocal never reach FOH">
-            <div className="space-y-3">
-              <ToggleRow label="Guide vocal in monitor" hint="Separated vocals for the singers" checked={draft.routing.guideVocalToMonitor} disabled={!draft.stems.vocals}
-                onChange={(v) => set({ routing: { ...draft.routing, guideVocalToMonitor: v } })} tone="mon" />
-              <ToggleRow label="Backing track to FOH" hint="Turn off for monitor-only songs" checked={draft.routing.backingToFoh}
-                onChange={(v) => set({ routing: { ...draft.routing, backingToFoh: v } })} />
-              <ToggleRow label="Backing track in monitor" hint="Band hears the track in their in-ears" checked={draft.routing.backingToMonitor}
-                onChange={(v) => set({ routing: { ...draft.routing, backingToMonitor: v } })} tone="mon" />
-            </div>
-          </Card>
-
-          {isLoaded && loaded && <RehearsalMixer tracks={loaded.tracks} />}
-
-          <Card title="Ask the assistant" subtitle="Local Ollama · suggestions only, you confirm">
-            <AiAssistant
-              placeholder="e.g. “drummer tidak main, bassist main” or “repeat the chorus twice at the end”"
-              examples={["Drummer tidak main, bassist main", "Full track tanpa vokal", "Bass lebih pelan", "Tambah chorus di akhir"]}
-              run={async (text) => {
-                if (dirty) await save();
-                return ipc.aiSong(draft.id, text);
-              }}
-              onApply={applyProposal}
-            />
-          </Card>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function SongInfo({ draft, set, playhead }: { draft: Song; set: (p: Partial<Song>) => void; playhead: number | null }) {
-  const alt = draft.analysis?.detected?.bpmAlternatives ?? [];
-  const conf = draft.analysis?.bpmConfidence;
-  const keyConf = draft.analysis?.keyConfidence;
+function withTempo(song: Song, patch: { bpm?: number | null; beatOffset?: number; timeSignature?: string }): Song {
+  const touchBpm = patch.bpm != null;
+  const touchBeat = patch.beatOffset != null;
+  const touchMeter = !!patch.timeSignature && patch.timeSignature !== song.timeSignature;
+  if (!touchBpm && !touchBeat && !touchMeter) return song;
+  const base = touchMeter ? { ...song, timeSignature: patch.timeSignature! } : song;
+  const seeded = touchBpm ? { ...base, bpm: patch.bpm! } : base;
+  const g0 = ensureGrid(seeded);
+  if (!g0) {
+    return {
+      ...base,
+      ...(touchBpm ? { bpm: patch.bpm! } : {}),
+      ...(touchBeat ? { beatOffset: patch.beatOffset! } : {}),
+    };
+  }
+  let grid = touchMeter ? remapBeatsPerBar(g0, beatsPerBar(base.timeSignature)) : { ...g0, source: "user" as const };
+  if (touchBeat) grid = { ...grid, beat1Sec: Math.max(0, patch.beatOffset!), source: "user" };
+  if (touchBpm) {
+    const v = Math.round(Math.min(300, Math.max(30, patch.bpm!)) * 1000) / 1000;
+    const first = [...grid.points].sort((a, b) => qOf(a.bar, a.beat, grid.beatsPerBar) - qOf(b.bar, b.beat, grid.beatsPerBar))[0];
+    if (first) grid = { ...grid, source: "user", points: grid.points.map((p) => (p.id === first.id ? { ...p, bpm: v } : p)) };
+  }
+  const first = [...grid.points].sort((a, b) => qOf(a.bar, a.beat, grid.beatsPerBar) - qOf(b.bar, b.beat, grid.beatsPerBar))[0];
+  return { ...base, grid, bpm: first?.bpm ?? base.bpm, beatOffset: grid.beat1Sec };
+}
+
+function CountInSettings({ draft, set }: { draft: Song; set: (p: Partial<Song>) => void }) {
+  const beatsPerBarCount = beatsPerBar(draft.timeSignature);
+  const beatSec = draft.bpm ? 60 / draft.bpm : null;
+  const barSec = beatSec ? beatSec * beatsPerBarCount : null;
+
   return (
-    <Card title="Tempo & key">
-      <div className="grid grid-cols-2 gap-3">
+    <Card
+      title="Count-in"
+      subtitle="Click beats before the intro. Tempo and Beat 1 live in the Beat grid panel on the right."
+    >
+      <div className="space-y-3">
         <div>
-          <div className="label mb-1.5 flex items-center gap-1.5">BPM {conf != null && conf < 0.6 && <span className="text-warn normal-case tracking-normal">· verify</span>}</div>
-          <div className="flex gap-1">
-            <NumInput value={draft.bpm} min={20} max={300} step={0.1} placeholder="—" onChange={(bpm) => set({ bpm })} />
-            <TapTempo onBpm={(bpm) => set({ bpm })} />
+          <div className="label mb-2">Bars before intro</div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {[0, 1, 2, 4].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => set({ countInBars: n })}
+                className={cn(
+                  "flex h-14 flex-col items-center justify-center rounded-xl border text-sm font-semibold transition-colors",
+                  draft.countInBars === n
+                    ? "border-accent bg-accent/15 text-accent"
+                    : "border-line text-muted hover:border-line-2 hover:text-fg",
+                )}
+              >
+                {n === 0 ? (
+                  <><span className="text-xl">—</span><span className="mt-0.5 text-[0.65rem] font-normal">No count</span></>
+                ) : (
+                  <><span className="text-2xl">{n}</span><span className="mt-0.5 text-[0.65rem] font-normal">{n === 1 ? "bar" : "bars"}</span></>
+                )}
+              </button>
+            ))}
           </div>
-          <div className="mt-1.5 flex gap-1">
-            <button className="h-6 flex-1 rounded border border-line text-[0.7rem] text-muted hover:text-fg" disabled={!draft.bpm} onClick={() => draft.bpm && set({ bpm: Math.round(draft.bpm * 50) / 100 })}>÷2</button>
-            <button className="h-6 flex-1 rounded border border-line text-[0.7rem] text-muted hover:text-fg" disabled={!draft.bpm} onClick={() => draft.bpm && set({ bpm: Math.min(300, draft.bpm * 2) })}>×2</button>
-          </div>
-          {alt.length > 0 && draft.bpm && !alt.includes(draft.bpm) && (
-            <button className="mt-1.5 text-left text-xs text-mon hover:underline" onClick={() => set({ bpm: alt[0] })}>Might be {alt[0]} BPM — use it</button>
+          {draft.countInBars > 0 && barSec && (
+            <p className="mt-2 text-xs text-faint">
+              Count-in duration: ~{fmtTime(draft.countInBars * barSec, true)}
+              {" "}({draft.countInBars * beatsPerBarCount} beats at {draft.bpm ?? "—"} BPM)
+            </p>
           )}
-        </div>
-        <div>
-          <div className="label mb-1.5 flex items-center gap-1.5">Key {keyConf != null && keyConf < 0.3 && <span className="text-warn normal-case tracking-normal">· verify</span>}</div>
-          <select className="field" value={draft.key ?? ""} onChange={(e) => set({ key: e.target.value || null })}>
-            <option value="">—</option>
-            <optgroup label="Major">{KEYS.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>
-            <optgroup label="Minor">{MINOR_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>
-          </select>
-        </div>
-        <div>
-          <div className="label mb-1.5">Time signature</div>
-          <select className="field" value={draft.timeSignature} onChange={(e) => set({ timeSignature: e.target.value })}>
-            {TIME_SIGS.map((t) => <option key={t}>{t}</option>)}
-          </select>
-        </div>
-        <div>
-          <div className="label mb-1.5">First downbeat</div>
-          <div className="flex gap-1">
-            <NumInput value={draft.beatOffset} min={0} max={30} step={0.01} suffix="s" onChange={(v) => set({ beatOffset: v ?? 0 })} />
-            <IconButton label="Set downbeat to playhead" variant="outline" disabled={playhead == null} onClick={() => playhead != null && set({ beatOffset: Math.round(playhead * 1000) / 1000 })}>
-              <Crosshair className="size-4" />
-            </IconButton>
-          </div>
-        </div>
-        <div>
-          <div className="label mb-1.5">Count-in</div>
-          <select className="field" value={draft.countInBars} onChange={(e) => set({ countInBars: Number(e.target.value) })}>
-            <option value={0}>None</option>
-            {[1, 2, 4].map((n) => <option key={n} value={n}>{n} bar{n > 1 ? "s" : ""}</option>)}
-          </select>
         </div>
         <div>
           <div className="label mb-1.5">Voice cue lead</div>
           <select className="field" value={draft.cueLeadBeats} onChange={(e) => set({ cueLeadBeats: Number(e.target.value) })}>
             {[2, 4, 6, 8].map((n) => <option key={n} value={n}>{n} beats before</option>)}
           </select>
+          <p className="mt-1 text-xs text-faint">How many beats before the next section the voice cue fires.</p>
         </div>
       </div>
     </Card>
@@ -444,20 +1003,6 @@ export function NumInput({ value, onChange, min, max, step = 1, placeholder, suf
   );
 }
 
-function TimeInput({ value, onChange, disabled }: { value: number; onChange: (t: number) => void; disabled?: boolean }) {
-  const [text, setText] = useState(fmtTime(value, true));
-  useEffect(() => setText(fmtTime(value, true)), [value]);
-  const commit = () => {
-    const t = parseTime(text);
-    if (t == null) setText(fmtTime(value, true));
-    else onChange(t);
-  };
-  return (
-    <input className="field tnum h-8 text-sm" value={text} disabled={disabled} onChange={(e) => setText(e.target.value)} onBlur={commit}
-      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
-  );
-}
-
 /** "1:23.4" | "83.4" → seconds */
 export function parseTime(s: string): number | null {
   const t = s.trim();
@@ -466,36 +1011,6 @@ export function parseTime(s: string): number | null {
   if (m) return Number(m[1]) * 60 + Number(m[2].replace(",", "."));
   const n = Number(t.replace(",", "."));
   return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-export function TapTempo({ onBpm }: { onBpm: (bpm: number) => void }) {
-  const taps = useRef<number[]>([]);
-  const [count, setCount] = useState(0);
-  const tap = () => {
-    const now = performance.now();
-    const t = taps.current;
-    if (t.length && now - t[t.length - 1] > 2000) t.length = 0;
-    t.push(now);
-    if (t.length > 9) t.shift();
-    setCount(t.length);
-    const bpm = tapBpm(t);
-    if (bpm) onBpm(bpm);
-  };
-  return (
-    <Tip label="Tap along with the beat (4+ taps)">
-      <button onClick={tap} className={cn("h-9 shrink-0 rounded-lg border px-3 text-xs font-semibold", count > 1 ? "border-accent/50 text-accent" : "border-line text-fg-2 hover:border-line-2")}>
-        TAP
-      </button>
-    </Tip>
-  );
-}
-
-export function tapBpm(times: number[]): number | null {
-  if (times.length < 4) return null;
-  const iv = times.slice(1).map((t, i) => t - times[i]);
-  const avg = iv.reduce((a, b) => a + b, 0) / iv.length;
-  if (avg <= 0) return null;
-  return Math.round((60000 / avg) * 10) / 10;
 }
 
 function guessNextKind(sections: Section[]) {
@@ -508,6 +1023,6 @@ function guessNextKind(sections: Section[]) {
 function editable(s: Song) {
   return {
     title: s.title, artist: s.artist, bpm: s.bpm, key: s.key, ts: s.timeSignature, off: s.beatOffset, prep: s.prep, routing: s.routing,
-    sections: s.sections, arr: s.arrangement, ci: s.countInBars, cl: s.cueLeadBeats, notes: s.notes,
+    sections: s.sections, arr: s.arrangement, ci: s.countInBars, cl: s.cueLeadBeats, notes: s.notes, grid: s.grid ?? null,
   };
 }

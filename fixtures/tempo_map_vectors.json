@@ -1,0 +1,28 @@
+{
+  "mockup": {
+    "beat1Sec": 2.32,
+    "beatsPerBar": 4,
+    "points": [
+      { "bar": 1, "beat": 1, "bpm": 71.8, "curve": "step" },
+      { "bar": 37, "beat": 1, "bpm": 76.0, "curve": "linear" },
+      { "bar": 45, "beat": 1, "bpm": 66.0, "curve": "step" }
+    ],
+    "expect": [
+      { "bar": 1, "beat": 1, "time": 2.32, "bpm": 71.8 },
+      { "bar": 37, "beat": 1, "time": 122.6542618384, "bpm": 76.0 },
+      { "bar": 40, "beat": 3, "time": 134.0377815667, "bpm": 71.625 },
+      { "bar": 45, "beat": 1, "time": 149.7413527043, "bpm": 66.0 },
+      { "bar": 46, "beat": 1, "time": 153.3777163407, "bpm": 66.0 }
+    ]
+  },
+  "constant": {
+    "beat1Sec": 0.5,
+    "beatsPerBar": 4,
+    "points": [{ "bar": 1, "beat": 1, "bpm": 120.0, "curve": "step" }],
+    "expect": [
+      { "bar": 1, "beat": 1, "time": 0.5, "bpm": 120.0 },
+      { "bar": 2, "beat": 1, "time": 2.5, "bpm": 120.0 },
+      { "bar": 1, "beat": 1, "qNeg": -4, "time": -1.5, "bpm": 120.0 }
+    ]
+  }
+}

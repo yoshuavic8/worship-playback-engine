@@ -18,8 +18,17 @@ pub struct AppSettings {
     pub separation_engine: String,
     /// auto | mps | cpu (PyTorch engine only)
     pub separation_device: String,
+    /// worship = Inst HQ 3 vocals + Demucs instruments. fast = Demucs only.
+    pub separation_profile: String,
     pub auto_advance: bool,
     pub onboarding_done: bool,
+    /// en | id — dates and relative time in the UI
+    #[serde(default = "default_ui_locale")]
+    pub ui_locale: String,
+}
+
+fn default_ui_locale() -> String {
+    "en".into()
 }
 
 pub fn default_shortcuts() -> BTreeMap<String, String> {
@@ -64,8 +73,10 @@ impl Default for AppSettings {
             separation_model: "htdemucs".into(),
             separation_engine: "auto".into(),
             separation_device: "auto".into(),
+            separation_profile: "worship".into(),
             auto_advance: true,
             onboarding_done: false,
+            ui_locale: "en".into(),
         }
     }
 }

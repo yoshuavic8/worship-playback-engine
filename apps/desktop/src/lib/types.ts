@@ -1,5 +1,9 @@
 // Mirrors the Rust models (serde camelCase). Keep in sync with src-tauri/src/models.rs.
 
+import type { Grid } from "./tempoMap";
+
+export type { Grid };
+
 export type SongStatus = "imported" | "queued" | "processing" | "ready" | "warning" | "error";
 export type StemMode = "remove" | "keep" | "optional";
 
@@ -52,6 +56,13 @@ export interface SongRouting {
   cueEnabled: boolean;
 }
 
+export interface TempoRegion {
+  startBeat: number;
+  startTime: number;
+  bpm: number;
+  timeSignature: string;
+}
+
 export interface SongAnalysis {
   bpmConfidence?: number | null;
   keyConfidence?: number | null;
@@ -60,6 +71,17 @@ export interface SongAnalysis {
   timings?: Record<string, number>;
   renderedWith?: PrepSettings;
   warnings?: string[];
+  // Musical timeline — distinguish audio start vs. musical start vs. first downbeat
+  audioStart?: number | null;        // first non-silent audio frame (seconds)
+  musicalStart?: number | null;      // first instrumental onset — after crowd / WL speech
+  // Tempo stability
+  tempoMode?: "fixed" | "drifting" | "changing" | null;
+  stability?: number | null;         // 0–1: how consistent the tempo is
+  downbeatConfidence?: number | null;// 0–1: how confident the downbeat position is
+  // TempoMap: only populated when tempoMode != "fixed"
+  tempoMap?: TempoRegion[] | null;
+  // Beat grid lock: user must confirm before click uses explicit beats
+  beatGridLocked?: boolean;
   [k: string]: unknown;
 }
 
@@ -88,6 +110,8 @@ export interface Song {
   notes: string;
   lastError: string | null;
   analysis: SongAnalysis | null;
+  /** Tempo automation. Missing on older songs — the editor builds one step point from bpm. */
+  grid?: Grid | null;
   createdAt: string;
   updatedAt: string;
   preparedAt: string | null;
@@ -157,8 +181,12 @@ export interface AppSettings {
   separationModel: string;
   separationEngine: string;
   separationDevice: string;
+  /** worship = Inst HQ 3 vocals + Demucs instruments. fast = Demucs only. */
+  separationProfile: string;
   autoAdvance: boolean;
   onboardingDone: boolean;
+  /** Display language for dates and a few UI strings (full UI remains English). */
+  uiLocale: "en" | "id";
 }
 
 export interface Bootstrap {
@@ -383,6 +411,16 @@ export interface AiStatus {
   models: string[];
 }
 
+/** Validated timeline edits from the local assistant. Missing fields stay as they are. */
+export interface TimelinePatch {
+  countInBars?: number;
+  cueLeadBeats?: number;
+  beatOffset?: number;
+  bpm?: number;
+  timeSignature?: string;
+  key?: string;
+}
+
 export interface AiProposal {
   intent: string;
   summary: string;
@@ -390,6 +428,7 @@ export interface AiProposal {
   prep: PrepSettings | null;
   routing: SongRouting | null;
   arrangement: string[] | null;
+  timeline: TimelinePatch | null;
   setlistSongIds: string[];
   setlistName: string | null;
   warnings: string[];
@@ -406,10 +445,3 @@ export interface Waveform {
   rms: number[];
 }
 
-export interface AppPathsInfo {
-  root: string;
-  songs: string;
-  logs: string;
-  models: string;
-  workerDir: string;
-}

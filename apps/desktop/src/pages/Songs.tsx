@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { KeyBpm, SongStatusBadge, StemPills, presetName } from "@/components/SongBits";
 import { Button, Confirm, Empty, IconButton, PageHeader, Segmented } from "@/components/ui";
-import { pickAndImport, playSong, prepareSongs } from "@/lib/actions";
+import { acceptSongReview, pickAndImport, playSong, prepareSongs } from "@/lib/actions";
 import { cn, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
 import { isRolling } from "@/lib/transport";
@@ -202,6 +202,13 @@ function SongRow({ song, selected, onToggle, onOpen, onDelete }: {
               {song.status === "imported" ? "Prepare" : "Prepare again"}
             </MenuItem>
             <MenuItem icon={<Sparkles className="size-4 opacity-0" />} onSelect={() => prepareSongs([song.id], { separate: false })}>Re-analyze only</MenuItem>
+            {song.status === "warning" && (
+              <MenuItem icon={<Sparkles className="size-4 opacity-0" />} onSelect={() => acceptSongReview(song.id)
+                .then((s) => toast.success(s.status === "ready" ? `“${s.title}” is live-ready` : "Still needs a look"))
+                .catch((e) => toast.error(errMsg(e)))}>
+                Tempo is correct
+              </MenuItem>
+            )}
             <MenuItem icon={<Copy className="size-4" />} onSelect={() => ipc.duplicateSong(song.id).then(() => toast.success("Duplicated")).catch((e) => toast.error(errMsg(e)))}>Duplicate</MenuItem>
             <MenuItem icon={<FolderOpen className="size-4" />} onSelect={() => revealItemInDir(`${song.dir}/song.json`).catch(() => {})}>Show in Finder</MenuItem>
             <Menu.Separator className="my-1 h-px bg-line" />

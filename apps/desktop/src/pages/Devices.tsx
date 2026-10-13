@@ -18,9 +18,18 @@ export function Devices() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [draft, setDraft] = useState<AudioSettings | null>(audio);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState<"foh" | "monitor" | "click" | "cue" | null>(null);
   const levelTimer = useRef<number | undefined>(undefined);
 
-  const refresh = () => ipc.listDevices().then(setDevices).catch((e) => toast.error(errMsg(e)));
+  const refresh = async () => {
+    try {
+      const list = await ipc.listDevices();
+      setDevices(list);
+      toast.success(list.length === 1 ? "1 audio device found" : `${list.length} audio devices found`);
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
   useEffect(() => { refresh(); }, []);
   useEffect(() => { if (audio && !draft) setDraft(audio); }, [audio, draft]);
 
@@ -62,6 +71,27 @@ export function Devices() {
 
   const map = channelMap(draft.routing, channels);
   const rates = device?.sampleRates.filter((r) => [44100, 48000, 88200, 96000].includes(r)) ?? [48000];
+
+  const runTest = async (kind: "foh" | "monitor" | "click" | "cue" | "stop") => {
+    if (kind === "stop") {
+      setTesting(null);
+      try {
+        await ipc.testSignal("stop");
+      } catch (e) {
+        toast.error(errMsg(e));
+      }
+      return;
+    }
+    setTesting(kind);
+    try {
+      await ipc.testSignal(kind);
+      const label = kind === "foh" ? "FOH test tone" : kind === "monitor" ? "Monitor test tone" : kind === "click" ? "Click preview" : "Cue preview";
+      toast.message(label, { description: "Playing on the monitor or FOH bus as routed." });
+    } catch (e) {
+      setTesting(null);
+      toast.error(errMsg(e));
+    }
+  };
 
   return (
     <div className="pb-10">
@@ -170,12 +200,12 @@ export function Devices() {
         <div className="col-span-12 space-y-5 xl:col-span-5">
           <Card title="Test outputs" subtitle="Check before the service — each signal plays only on its bus">
             <div className="grid grid-cols-2 gap-2">
-              <TestBtn tone="foh" icon={<Speaker className="size-4" />} label="Test FOH" sub="440 Hz tone" onClick={() => test("foh")} />
-              <TestBtn tone="mon" icon={<Headphones className="size-4" />} label="Test monitor" sub="880 Hz tone" onClick={() => test("monitor")} />
-              <TestBtn tone="mon" icon={<Metronome className="size-4" />} label="Test click" sub="1 bar @ 100 BPM" onClick={() => test("click")} />
-              <TestBtn tone="mon" icon={<Mic className="size-4" />} label="Test cue" sub="Spoken cue" onClick={() => test("cue")} />
+              <TestBtn active={testing === "foh"} tone="foh" icon={<Speaker className="size-4" />} label="Test FOH" sub={testing === "foh" ? "Playing on FOH…" : "440 Hz tone"} onClick={() => void runTest("foh")} />
+              <TestBtn active={testing === "monitor"} tone="mon" icon={<Headphones className="size-4" />} label="Test monitor" sub={testing === "monitor" ? "Playing on monitor…" : "880 Hz tone"} onClick={() => void runTest("monitor")} />
+              <TestBtn active={testing === "click"} tone="mon" icon={<Metronome className="size-4" />} label="Test click" sub={testing === "click" ? "Click on monitor…" : "1 bar @ 100 BPM"} onClick={() => void runTest("click")} />
+              <TestBtn active={testing === "cue"} tone="mon" icon={<Mic className="size-4" />} label="Test cue" sub={testing === "cue" ? "Cue on monitor…" : "Spoken cue"} onClick={() => void runTest("cue")} />
             </div>
-            <Button className="mt-3 w-full" variant="outline" icon={<Square className="size-3.5" />} onClick={() => test("stop")}>Stop test</Button>
+            <Button className="mt-3 w-full" variant="outline" icon={<Square className="size-3.5" />} onClick={() => void runTest("stop")}>Stop test</Button>
             <div className="mt-4 rounded-xl bg-bg-2/60 p-3"><BusMeters meters={meters} className="w-full" /></div>
           </Card>
 
@@ -190,7 +220,7 @@ export function Devices() {
                   <select className="field" value={draft.clickSound} onChange={(e) => setLevel({ clickSound: e.target.value })}>
                     {clickSounds.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
                   </select>
-                  <Button variant="outline" onClick={() => test("click")}>Preview</Button>
+                  <Button variant="outline" onClick={() => void runTest("click")}>Preview</Button>
                 </div>
               </div>
             </div>
@@ -200,8 +230,6 @@ export function Devices() {
     </div>
   );
 }
-
-const test = (kind: "foh" | "monitor" | "click" | "cue" | "stop") => ipc.testSignal(kind).catch((e) => toast.error(errMsg(e)));
 
 function ProfileCard({ active, onClick, icon, title, desc, note, disabled }: {
   active: boolean; onClick: () => void; icon: React.ReactNode; title: string; desc: string; note: string; disabled?: boolean;
@@ -217,10 +245,10 @@ function ProfileCard({ active, onClick, icon, title, desc, note, disabled }: {
   );
 }
 
-function TestBtn({ icon, label, sub, onClick, tone }: { icon: React.ReactNode; label: string; sub: string; onClick: () => void; tone: "foh" | "mon" }) {
+function TestBtn({ icon, label, sub, onClick, tone, active }: { icon: React.ReactNode; label: string; sub: string; onClick: () => void; tone: "foh" | "mon"; active?: boolean }) {
   return (
     <button onClick={onClick} className={cn("flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors",
-      tone === "foh" ? "border-foh/30 hover:bg-foh/[0.07]" : "border-mon/30 hover:bg-mon/[0.07]")}>
+      active ? (tone === "foh" ? "border-foh bg-foh/15" : "border-mon bg-mon/15") : tone === "foh" ? "border-foh/30 hover:bg-foh/[0.07]" : "border-mon/30 hover:bg-mon/[0.07]")}>
       <span className={tone === "foh" ? "text-foh" : "text-mon"}>{icon}</span>
       <div>
         <div className="text-sm font-semibold">{label}</div>

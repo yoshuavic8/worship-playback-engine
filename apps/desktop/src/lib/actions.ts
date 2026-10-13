@@ -44,6 +44,12 @@ export async function importPaths(paths: string[]) {
   }
 }
 
+export async function acceptSongReview(id: string) {
+  const song = await ipc.acceptReview(id);
+  useApp.getState().upsertSong(song);
+  return song;
+}
+
 export async function prepareSongs(ids: string[], options: Partial<PrepOptions> = {}) {
   if (!ids.length) return;
   try {

@@ -37,7 +37,7 @@ pub struct FileDef {
 pub struct ResourceDef {
     pub id: &'static str,
     pub kind: &'static str,
-    /// "demucs" | "demucs-mlx"
+    /// "demucs" | "demucs-mlx" | "mdx"
     pub engine: &'static str,
     pub model: &'static str,
     pub name: &'static str,
@@ -156,12 +156,32 @@ pub fn catalog() -> Vec<ResourceDef> {
             ],
             extra: vec![],
         },
+        ResourceDef {
+            id: "mdx-inst-hq-3",
+            kind: "model",
+            engine: "mdx",
+            model: "inst-hq-3",
+            name: "UVR-MDX-NET Inst HQ 3",
+            description: "Vocal remover used by the Worship profile. Demucs still splits drums, bass and other from the instrumental. Best on live recordings where Demucs leaves the vocal in the backing.",
+            version: "Inst HQ 3",
+            license: "Community model distributed with Ultimate Vocal Remover",
+            source: "https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models",
+            recommended: true,
+            files: vec![FileDef {
+                url: "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET-Inst_HQ_3.onnx",
+                filename: "UVR-MDX-NET-Inst_HQ_3.onnx",
+                size: 66_759_214,
+                checksum: Checksum::Sha256("317554b07fe1ea5279a77f2b1520a41ea4b93432560c4ffd08792c30fddf9adc"),
+            }],
+            extra: vec![],
+        },
     ]
 }
 
 pub fn resource_dir(paths: &AppPaths, def: &ResourceDef) -> PathBuf {
     match def.engine {
         "demucs-mlx" => paths.models().join("demucs-mlx"),
+        "mdx" => paths.models().join("mdx"),
         _ => paths.demucs_models(),
     }
 }

@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge, Button, Confirm, Empty, PageHeader } from "@/components/ui";
 import { openDialog, saveDialog } from "@/lib/actions";
-import { fmtDate, fmtDuration, relTime } from "@/lib/format";
+import { fmtDate, fmtDateShort, fmtDuration, relTime } from "@/lib/format";
+import { t } from "@/lib/locale";
 import { errMsg, ipc } from "@/lib/ipc";
 import type { Setlist } from "@/lib/types";
 import { useApp } from "@/store/app";
@@ -14,7 +15,7 @@ export async function newSetlist(name?: string, songIds: string[] = []) {
   const d = nextSunday();
   try {
     const s = await ipc.saveSetlist({
-      id: "", name: name ?? `Sunday Service · ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`,
+      id: "", name: name ?? `${t("sundayService")} · ${fmtDateShort(d.toISOString().slice(0, 10))}`,
       date: d.toISOString().slice(0, 10), notes: "", createdAt: "", updatedAt: "",
       items: songIds.map((songId, i) => ({
         id: "", songId, position: i, presetId: null, clickEnabled: null, cueEnabled: null, fohEnabled: null, monitorBacking: null,
@@ -67,7 +68,10 @@ export function Setlists() {
     const dur = items.reduce((a, x) => a + (x?.duration ?? 0), 0);
     const notReady = items.filter((x) => !x || (x.status !== "ready" && x.status !== "warning")).length;
     return (
-      <div key={s.id} onClick={() => navigate("setlist", s.id)} className="card group relative cursor-pointer p-5 transition-colors hover:border-line-2">
+      <div key={s.id} role="button" tabIndex={0} aria-label={`Open ${s.name}`}
+        onClick={() => navigate("setlist", s.id)}
+        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); navigate("setlist", s.id); } }}
+        className="card group relative cursor-pointer p-5 transition-colors hover:border-line-2">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs text-muted"><CalendarDays className="size-3.5" />{s.date ? fmtDate(s.date) : "No date"}</div>
@@ -101,12 +105,12 @@ export function Setlists() {
         </ol>
         <div className="mt-4 flex items-center gap-2 border-t border-line pt-3 text-xs text-muted">
           <span>{items.length} songs · {fmtDuration(dur)}</span>
+          <span className="text-faint">· edited {relTime(s.updatedAt)}</span>
           <span className="flex-1" />
           {notReady > 0 ? <Badge tone="warn">{notReady} not ready</Badge> : items.length > 0 && <Badge tone="ok">Ready</Badge>}
           <Button size="sm" variant="secondary" icon={<Radio className="size-3.5" />} disabled={!items.length}
             onClick={(e) => { e.stopPropagation(); navigate("live", s.id); }}>Live</Button>
         </div>
-        <div className="absolute right-5 bottom-[3.6rem] text-[0.68rem] text-faint">edited {relTime(s.updatedAt)}</div>
       </div>
     );
   };

@@ -3,7 +3,8 @@ import { fmtBytes, fmtDb, fmtTime, meterLevel } from "./format";
 import { PROFILES, channelMap, decodeTarget, encodeTarget, isLiveSafe, validateRouting } from "./routing";
 import { buildPlan, kindFromLabel, nextLabel, resolveSections, sectionShort } from "./sections";
 import { keyLabel, matchShortcut, DEFAULT_SHORTCUTS } from "./shortcuts";
-import { parseTime, tapBpm } from "@/pages/SongEditor";
+import { parseTime } from "@/pages/SongEditor";
+import { tapBpm } from "@/lib/tapTempo";
 import type { RoutingProfile, Section } from "./types";
 
 describe("format", () => {

@@ -1,0 +1,107 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1600px;height:1000px;background:#0d0e10;color:#e7e9ee;font:13px -apple-system,"SF Pro Text",Inter,system-ui,sans-serif;overflow:hidden}
+.top{height:64px;display:flex;align-items:center;gap:18px;padding:0 20px;border-bottom:1px solid #22252b;background:#121316}
+.title{font-size:18px;font-weight:600}.sub{color:#8a8f99;font-size:12px}
+.pill{display:flex;align-items:center;gap:8px;background:#1a1c20;border:1px solid #2a2d33;border-radius:10px;padding:6px 10px}
+.pill b{font-size:16px;font-variant-numeric:tabular-nums}.pill span{color:#8a8f99;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.ok{color:#5ad38a}.warn{color:#f4b740}.btn{background:#1f2227;border:1px solid #30343b;border-radius:8px;padding:7px 12px;font-weight:600}
+.primary{background:#f4b740;color:#1a1300;border-color:#f4b740}
+.transport{display:flex;gap:8px;align-items:center}
+.play{width:40px;height:40px;border-radius:50%;background:#f4b740;color:#111;display:grid;place-items:center;font-size:16px}
+.pos{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.main{display:flex;height:calc(100% - 64px - 34px)}
+.heads{width:210px;border-right:1px solid #22252b;background:#111215}
+.lane-h{height:var(--h);display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1d2024}
+.lane-h .n{flex:1;font-weight:600}.ms{display:flex;gap:4px}.ms i{font-style:normal;width:22px;height:20px;border-radius:5px;border:1px solid #33373e;display:grid;place-items:center;font-size:10px;font-weight:700;color:#9aa0aa}
+.ms i.on{background:#f4b740;color:#111;border-color:#f4b740}.ms i.s{background:#4aa3ff;color:#06121f;border-color:#4aa3ff}
+.dot{width:8px;height:8px;border-radius:50%}
+.tl{flex:1;position:relative;overflow:hidden}
+.ruler{height:34px;border-bottom:1px solid #2a2d33;position:relative;background:#141518}
+.bar{position:absolute;top:0;bottom:0;border-left:1px solid #2c3036;font-size:11px;color:#8a8f99;padding:3px 4px;font-variant-numeric:tabular-nums}
+.bar.major{color:#e7e9ee;border-left-color:#4a4f57}
+.lane{height:var(--h);border-bottom:1px solid #1d2024;position:relative}
+.clip{position:absolute;top:6px;bottom:6px;border-radius:7px;padding:6px 9px;font-weight:700;font-size:12px;overflow:hidden;border:1px solid}
+.clip small{display:block;font-weight:500;opacity:.65;font-size:10.5px;margin-top:2px}
+.clip .hl,.clip .hr{position:absolute;top:0;bottom:0;width:6px}.clip .hr{right:0;background:rgba(255,255,255,.18)}
+.sel{box-shadow:0 0 0 2px #fff inset}
+.wave{position:absolute;inset:6px 0;opacity:.8}
+.cue{position:absolute;top:8px;height:24px;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:700;background:#1d3550;color:#8cc4ff;border:1px solid #2f5b88;white-space:nowrap}
+.cue:before{content:"🔊 "}
+.playhead{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 10px rgba(255,255,255,.6);z-index:5}
+.loop{position:absolute;top:0;height:34px;background:rgba(244,183,64,.18);border-left:2px solid #f4b740;border-right:2px solid #f4b740;z-index:3}
+.beat1{position:absolute;top:0;bottom:0;width:2px;background:#f4b740;z-index:4}
+.beat1 b{position:absolute;bottom:8px;left:4px;background:#f4b740;color:#1a1300;font-size:11px;padding:2px 6px;border-radius:5px;white-space:nowrap}
+.count{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,rgba(255,255,255,.03) 0 8px,transparent 8px 16px);border-right:1px dashed #555}
+.insp{width:300px;border-left:1px solid #22252b;background:#111215;padding:16px;display:flex;flex-direction:column;gap:14px}
+.card{background:#16181b;border:1px solid #24272d;border-radius:12px;padding:12px}
+.card h4{font-size:11px;color:#8a8f99;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.row{display:flex;justify-content:space-between;align-items:center;margin:6px 0}
+.seg{display:flex;gap:4px;flex-wrap:wrap}.seg span{border:1px solid #30343b;border-radius:6px;padding:4px 8px;font-size:11.5px}.seg span.on{background:#2a2d33;border-color:#555}
+.status{height:34px;border-top:1px solid #22252b;background:#121316;display:flex;align-items:center;gap:22px;padding:0 16px;color:#8a8f99;font-size:12px}
+kbd{border:1px solid #3a3e45;border-radius:4px;padding:0 5px;font:11px ui-monospace,monospace;color:#c9ccd2}
+.conf{height:6px;border-radius:3px;background:#24272d;overflow:hidden;width:110px}.conf i{display:block;height:100%}
+</style></head><body>
+<div class="top">
+  <div><div class="title">Kau Setia Selamanya</div><div class="sub">Komunitas Pujian · D · 4/4</div></div>
+  <div class="transport" style="margin-left:24px"><div class="btn">⏮</div><div class="play">▶</div><div class="btn">⟲ Loop</div></div>
+  <div class="pos">12 . 3 . 1</div><div class="sub" style="margin-left:-10px">0:31.84</div>
+  <div class="pill"><span>Tempo</span><b>71.80</b><span class="ok">● locked</span></div>
+  <div class="pill"><span>Beat 1</span><b>2.320 s</b><span class="ok">94%</span></div>
+  <div class="pill"><span>Grid</span><b>Fixed</b><span class="sub">±2 ms</span></div>
+  <div style="flex:1"></div>
+  <div class="btn">↶ Undo</div><div class="btn">Snap: Bar ▾</div><div class="btn primary">Done</div>
+</div>
+<div class="main">
+  <div class="heads">
+    <div style="height:34px;border-bottom:1px solid #2a2d33;display:flex;align-items:center;padding:0 12px;color:#8a8f99;font-size:11px">BARS</div>
+    <div class="lane-h" style="--h:58px"><span class="dot" style="background:#f4b740"></span><span class="n">Arrangement</span></div>
+    <div class="lane-h" style="--h:44px"><span class="dot" style="background:#4aa3ff"></span><span class="n">Cues</span><div class="ms"><i class="on">M</i></div></div>
+    <div class="lane-h" style="--h:44px"><span class="dot" style="background:#ddd"></span><span class="n">Click</span><div class="ms"><i>M</i></div></div>
+    <div class="lane-h" style="--h:62px"><span class="dot" style="background:#ff7a59"></span><span class="n">Drums</span><div class="ms"><i>M</i><i>S</i></div></div>
+    <div class="lane-h" style="--h:62px"><span class="dot" style="background:#b78cff"></span><span class="n">Bass</span><div class="ms"><i>M</i><i>S</i></div></div>
+    <div class="lane-h" style="--h:62px"><span class="dot" style="background:#5ad38a"></span><span class="n">Guitar</span><div class="ms"><i>M</i><i>S</i></div></div>
+    <div class="lane-h" style="--h:62px"><span class="dot" style="background:#4ad1d1"></span><span class="n">Keys / Other</span><div class="ms"><i>M</i><i class="s">S</i></div></div>
+    <div class="lane-h" style="--h:62px"><span class="dot" style="background:#888"></span><span class="n" style="color:#8a8f99">Vocals (guide)</span><div class="ms"><i class="on">M</i><i>S</i></div></div>
+  </div>
+  <div class="tl" id="tl"></div>
+  <div class="insp">
+    <div class="card"><h4>Selected · Chorus 1</h4>
+      <div class="row"><span>Name</span><b>Chorus 1</b></div>
+      <div class="seg"><span>Intro</span><span>Verse</span><span>Pre</span><span class="on">Chorus</span><span>Bridge</span><span>Inst</span><span>Tag</span><span>Outro</span></div>
+      <div class="row"><span class="sub">Start</span><b>Bar 13</b></div><div class="row"><span class="sub">Length</span><b>8 bars</b></div>
+      <div class="row"><span class="sub">Cue</span><b>"Chorus" · 1 bar before</b></div>
+    </div>
+    <div class="card"><h4>Beat grid</h4>
+      <div class="row"><span>Tempo</span><b>71.80 BPM</b></div>
+      <div class="row"><span class="sub">Confidence</span><div class="conf"><i style="width:92%;background:#5ad38a"></i></div></div>
+      <div class="row"><span class="sub">Beat 1</span><b>2.320 s</b></div>
+      <div class="seg" style="margin-top:8px"><span>÷2</span><span>×2</span><span>◀ beat</span><span>beat ▶</span><span>◀ 5ms</span><span>5ms ▶</span></div>
+      <div class="btn" style="margin-top:10px;text-align:center">Tap Beat 1 while playing <kbd>T</kbd></div>
+    </div>
+    <div class="card"><h4>Shortcuts</h4>
+      <div class="sub" style="line-height:1.9"><kbd>Space</kbd> play · <kbd>M</kbd> split section at playhead · <kbd>⌫</kbd> merge · <kbd>L</kbd> loop selection · <kbd>C</kbd> add cue · <kbd>←/→</kbd> move 1 bar · <kbd>⌥←/→</kbd> 1 beat · <kbd>⌘Z</kbd> undo · <kbd>Z</kbd> zoom to selection</div>
+    </div>
+  </div>
+</div>
+<div class="status"><span>Count-in <b style="color:#e7e9ee">1 bar</b></span><span>Snap <b style="color:#e7e9ee">Bar</b></span><span>Monitor: click · cues · guide vocal</span><span style="flex:1"></span><span>Drag clip edges to move a boundary · drag ruler to set loop · double-click lane to add</span></div>
+<script>
+const tl=document.getElementById('tl');const W=1080,bars=56,pxb=W/40;const x0=20;
+const bx=b=>x0+b*pxb;
+let h='<div class="ruler">';for(let b=0;b<42;b++){h+=`<div class="bar ${b%4==0?'major':''}" style="left:${bx(b)}px">${b%4==0||pxb>30?b+1:''}</div>`}
+h+='<div class="loop" style="left:'+bx(12)+'px;width:'+(8*pxb)+'px"></div></div>';
+const secs=[["Intro",0,4,"#9aa0aa","intro"],["Verse 1",4,8,"#4aa3ff"],["Chorus 1",12,8,"#f4b740"],["Verse 2",20,8,"#4aa3ff"],["Chorus 2",28,8,"#f4b740"],["Bridge",36,8,"#ff6fa8"]];
+h+='<div class="lane" style="--h:58px"><div class="count" style="left:0;width:'+x0+'px"></div>';
+secs.forEach(([n,s,l,c],i)=>{h+=`<div class="clip ${i==2?'sel':''}" style="left:${bx(s)+1}px;width:${l*pxb-3}px;background:${c}22;border-color:${c}88;color:${c}">${n}<small>${l} bars · bar ${s+1}</small><div class="hr"></div></div>`});
+h+='</div><div class="lane" style="--h:44px">';
+[["Verse",3],["Chorus",11],["Verse",19],["Chorus",27],["Build ↑",31.6],["Bridge",35]].forEach(([n,b])=>{h+=`<div class="cue" style="left:${bx(b)}px">${n}</div>`});
+h+='</div><div class="lane" style="--h:44px">';
+for(let b=0;b<160;b++){const x=bx(b/4);if(x>W+40)break;h+=`<div style="position:absolute;left:${x}px;top:${b%4?18:10}px;width:2px;height:${b%4?10:24}px;background:${b%4?'#666':'#f4b740'}"></div>`}
+h+='</div>';
+const cols=["#ff7a59","#b78cff","#5ad38a","#4ad1d1","#666"];
+cols.forEach((c,k)=>{h+=`<div class="lane" style="--h:62px"><svg class="wave" width="${W+60}" height="50">`;
+ let p='';for(let x=0;x<W+60;x+=3){const b=(x-x0)/pxb;let e=b<0?0:(b<4?0.25:(b<12?0.5:(b<20?0.95:(b<28?0.55:0.9))));if(k==0&&b<4)e=0;if(k==4)e*=0.6;const a=(k==0? (Math.abs(Math.sin(x*0.35))**6) : (0.5+0.5*Math.abs(Math.sin(x*0.13+k))))*e*22+0.5;p+=`<rect x="${x}" y="${25-a}" width="2" height="${2*a}" />`}
+ h+=`<g fill="${c}" opacity="${k==4?0.35:0.75}">${p}</g></svg></div>`});
+h+='<div class="beat1" style="left:'+bx(0)+'px"><b>Beat 1 ◆</b></div><div class="playhead" style="left:'+bx(13.5)+'px"></div>';
+tl.innerHTML=h;
+</script></body></html>

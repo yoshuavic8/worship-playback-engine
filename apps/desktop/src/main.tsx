@@ -9,8 +9,14 @@ window.addEventListener("contextmenu", (e) => {
   if (!(t.tagName === "INPUT" || t.tagName === "TEXTAREA")) e.preventDefault();
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+async function start() {
+  if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+    (await import("./dev/mock")).install();
+  }
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
+start();

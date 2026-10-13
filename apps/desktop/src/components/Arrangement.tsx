@@ -44,14 +44,20 @@ export function ArrangementEditor({ sections, value, onChange }: {
         {!natural && <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3.5" />} onClick={() => onChange([])}>Natural order</Button>}
       </div>
       <div className="mt-3">
-        <div className="label mb-1.5">Add section</div>
+        <div className="label mb-1.5">Add section to arrangement</div>
         <div className="flex flex-wrap gap-1.5">
-          {sections.filter((s) => s.id !== "__song").map((s) => (
-            <button key={s.id} onClick={() => onChange([...order, s.id])}
-              className="flex h-7 items-center gap-1.5 rounded-md border border-line px-2 text-xs font-medium text-fg-2 hover:border-line-2 hover:text-fg">
-              <Plus className="size-3" /><span className="size-2 rounded-full" style={{ background: sectionColor(s.kind) }} />{s.label}
-            </button>
-          ))}
+          {sections.filter((s) => s.id !== "__song").map((s) => {
+            const dur = s.end - s.start;
+            return (
+              <button key={s.id} onClick={() => onChange([...order, s.id])}
+                className="flex h-8 items-center gap-1.5 rounded-md border border-line px-2 text-xs font-medium text-fg-2 hover:border-line-2 hover:text-fg">
+                <Plus className="size-3" />
+                <span className="size-2 rounded-full" style={{ background: sectionColor(s.kind) }} />
+                {s.label}
+                <span className="text-faint">{fmtTime(dur)}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -61,15 +67,19 @@ export function ArrangementEditor({ sections, value, onChange }: {
 function Chip({ id, section, onRemove }: { id: string; section: ResolvedSection; onRemove: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const color = sectionColor(section.kind);
+  const dur = section.end - section.start;
   return (
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition, borderColor: `color-mix(in oklab, ${color} 45%, transparent)`, background: `color-mix(in oklab, ${color} 12%, transparent)`, zIndex: isDragging ? 10 : undefined }}
-      className="group flex h-8 cursor-grab items-center gap-1 rounded-lg border pr-1 pl-2.5 text-xs font-semibold active:cursor-grabbing"
+      className="group flex h-9 cursor-grab items-center gap-1 rounded-lg border pr-1 pl-2.5 text-xs font-semibold active:cursor-grabbing"
       {...attributes}
       {...listeners}
     >
-      <span style={{ color }}>{section.label}</span>
+      <div className="flex flex-col leading-none">
+        <span style={{ color }}>{section.label}</span>
+        <span className="tnum mt-0.5 text-[0.6rem] font-normal opacity-50">{fmtTime(dur)}</span>
+      </div>
       <button onPointerDown={(e) => e.stopPropagation()} onClick={onRemove} className="grid size-5 place-items-center rounded text-muted opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-fg" aria-label={`Remove ${section.label}`}>
         <X className="size-3" />
       </button>

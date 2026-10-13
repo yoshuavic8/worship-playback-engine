@@ -112,6 +112,73 @@ pub struct Section {
     pub start: f64,
 }
 
+/// How tempo moves from this breakpoint to the next one. The lane says "Ramp" for `linear`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Curve {
+    Step,
+    Linear,
+}
+
+impl Default for Curve {
+    fn default() -> Self {
+        Self::Step
+    }
+}
+
+/// One tempo breakpoint. Bar and beat are 1-based. Point 1 is always bar 1 beat 1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TempoPoint {
+    pub id: String,
+    pub bar: u32,
+    pub beat: u32,
+    pub bpm: f64,
+    #[serde(default)]
+    pub curve: Curve,
+}
+
+/// The song's tempo map. Click, cue, and count-in all read this — never a lone BPM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Grid {
+    pub beat1_sec: f64,
+    pub beats_per_bar: u32,
+    pub points: Vec<TempoPoint>,
+    #[serde(default = "grid_source")]
+    pub source: String,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default = "grid_version")]
+    pub version: u32,
+}
+
+fn grid_source() -> String {
+    "user".into()
+}
+fn grid_version() -> u32 {
+    1
+}
+
+impl Grid {
+    pub fn constant(beat1_sec: f64, beats_per_bar: u32, bpm: f64) -> Self {
+        Self {
+            beat1_sec,
+            beats_per_bar: beats_per_bar.max(1),
+            points: vec![TempoPoint {
+                id: "p1".into(),
+                bar: 1,
+                beat: 1,
+                bpm,
+                curve: Curve::Step,
+            }],
+            source: "analysis".into(),
+            confidence: None,
+            version: 1,
+        }
+    }
+}
+
 /// Per-song routing defaults. Click and cue are monitor-only by design and have no FOH flag.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -166,6 +233,10 @@ pub struct Song {
     pub notes: String,
     pub last_error: Option<String>,
     pub analysis: Option<serde_json::Value>,
+    /// Tempo automation. Absent on songs saved before the map existed; the engine
+    /// then builds one step point from `bpm` and `beat_offset`.
+    #[serde(default)]
+    pub grid: Option<Grid>,
     pub created_at: String,
     pub updated_at: String,
     pub prepared_at: Option<String>,
@@ -175,6 +246,17 @@ impl Song {
     pub fn beats_per_bar(&self) -> u32 {
         parse_time_signature(&self.time_signature).0
     }
+
+    /// The stored map, or one step point when the song only has a BPM.
+    pub fn resolved_grid(&self) -> Option<Grid> {
+        if let Some(g) = &self.grid {
+            if g.points.iter().any(|p| (20.0..=300.0).contains(&p.bpm)) {
+                return Some(g.clone());
+            }
+        }
+        let bpm = self.bpm.filter(|b| (20.0..=300.0).contains(b))?;
+        Some(Grid::constant(self.beat_offset, self.beats_per_bar(), bpm))
+    }
 }
 
 pub fn parse_time_signature(ts: &str) -> (u32, u32) {
@@ -182,6 +264,19 @@ pub fn parse_time_signature(ts: &str) -> (u32, u32) {
     let n = it.next().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(4);
     let d = it.next().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(4);
     (n.clamp(1, 16), d.clamp(1, 16))
+}
+
+/// Time signature that matches a tempo map's beats per bar.
+/// Six beats is 6/8. Any other count keeps the current signature when the
+/// numerator already matches, and otherwise uses a quarter-note bar.
+pub fn meter_for_beats(current: &str, beats_per_bar: u32) -> String {
+    let bpb = beats_per_bar.clamp(1, 16);
+    let (n, _) = parse_time_signature(current);
+    if n == bpb {
+        return current.to_string();
+    }
+    let denom = if bpb == 6 { 8 } else { 4 };
+    format!("{bpb}/{denom}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -375,5 +470,14 @@ mod tests {
     fn time_signature_parse() {
         assert_eq!(parse_time_signature("6/8"), (6, 8));
         assert_eq!(parse_time_signature("garbage"), (4, 4));
+    }
+
+    #[test]
+    fn meter_follows_the_map() {
+        assert_eq!(meter_for_beats("4/4", 6), "6/8");
+        assert_eq!(meter_for_beats("6/8", 4), "4/4");
+        assert_eq!(meter_for_beats("6/8", 6), "6/8");
+        assert_eq!(meter_for_beats("3/4", 3), "3/4");
+        assert_eq!(meter_for_beats("2/4", 2), "2/4");
     }
 }

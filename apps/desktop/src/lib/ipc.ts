@@ -20,13 +20,15 @@ export const ipc = {
 
   // songs
   listSongs: () => call<T.Song[]>("list_songs"),
-  getSong: (id: string) => call<T.Song>("get_song", { id }),
   importSongs: (paths: string[]) => call<T.ImportResult>("import_songs", { paths }),
   saveSong: (song: T.Song) => call<T.Song>("save_song", { song }),
+  acceptReview: (id: string) => call<T.Song>("accept_song_review", { id }),
   deleteSong: (id: string) => call<void>("delete_song", { id }),
   duplicateSong: (id: string) => call<T.Song>("duplicate_song", { id }),
   waveform: (id: string) => call<T.Waveform>("get_waveform", { id }),
   rerenderBacking: (id: string) => call<T.Song>("rerender_backing", { id }),
+  setDownbeat: (id: string, offsetSecs: number) => call<T.Song>("set_downbeat", { id, offsetSecs }),
+  setGrid: (id: string, grid: T.Grid) => call<T.Song>("set_grid", { id, grid }),
 
   // preparation
   prepare: (ids: string[], options: T.PrepOptions) => call<T.PreparationJob[]>("prepare_songs", { ids, options }),
@@ -52,7 +54,6 @@ export const ipc = {
   load: (songId: string, context: T.PlayContext) => call<T.LoadedInfo>("player_load", { songId, context }),
   play: (countIn: boolean) => call<void>("player_play", { countIn }),
   pause: () => call<void>("player_pause"),
-  toggle: (countIn: boolean) => call<void>("player_toggle", { countIn }),
   stop: () => call<void>("player_stop"),
   panic: () => call<void>("player_panic"),
   fade: (seconds: number) => call<void>("player_fade", { seconds }),
@@ -63,9 +64,7 @@ export const ipc = {
   setTrack: (role: T.TrackRole, gainDb: number, muted: boolean) => call<void>("player_set_track", { role, gainDb, muted }),
   setClick: (enabled: boolean) => call<void>("player_set_click", { enabled }),
   setCue: (enabled: boolean) => call<void>("player_set_cue", { enabled }),
-  status: () => call<T.PlaybackStatus>("player_status"),
   loaded: () => call<T.LoadedInfo | null>("player_loaded"),
-  unload: () => call<void>("player_unload"),
 
   // live
   liveOpen: (setlistId: string) => call<T.LiveInfo>("live_open", { setlistId }),
@@ -82,7 +81,6 @@ export const ipc = {
   removeResource: (id: string) => call<void>("remove_resource", { id }),
   installPythonEnv: () => call<void>("install_python_env"),
   logs: (limit?: number, category?: string | null) => call<T.LogEntry[]>("get_logs", { limit, category }),
-  appPaths: () => call<T.AppPathsInfo>("app_paths"),
 
   // AI (local Ollama only — optional)
   aiStatus: () => call<T.AiStatus>("ai_status"),

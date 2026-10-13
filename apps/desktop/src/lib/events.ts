@@ -38,9 +38,17 @@ export async function connectEvents(): Promise<() => void> {
     onJob(e.payload);
     app().refreshJobs();
     refreshLibrary();
-    toast.success(`“${e.payload.songTitle}” is live-ready`, {
-      description: e.payload.processingSeconds ? `Prepared in ${Math.round(e.payload.processingSeconds)} s` : undefined,
-    });
+    const note = e.payload.message && e.payload.message !== "Live-ready" ? e.payload.message : "";
+    if (note) {
+      toast.warning(`“${e.payload.songTitle}” needs a review`, {
+        description: note,
+        duration: 12000,
+      });
+    } else {
+      toast.success(`“${e.payload.songTitle}” is live-ready`, {
+        description: e.payload.processingSeconds ? `Prepared in ${Math.round(e.payload.processingSeconds)} s` : undefined,
+      });
+    }
   }));
   offs.push(await listen<PreparationJob>("preparation:failed", (e) => {
     onJob(e.payload);

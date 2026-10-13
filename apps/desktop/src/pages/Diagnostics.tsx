@@ -24,6 +24,11 @@ export function Diagnostics() {
       const [r, res] = await Promise.all([ipc.readiness(), ipc.listResources()]);
       setReady(r);
       setResources(res);
+      const liveOk = r.playback === "READY";
+      const prepOk = r.preparation === "READY";
+      toast.success(liveOk && prepOk ? "All checks passed" : "Re-check complete", {
+        description: `Live playback: ${r.playback} · Preparation: ${r.preparation}`,
+      });
     } catch (e) {
       toast.error(errMsg(e));
     } finally {

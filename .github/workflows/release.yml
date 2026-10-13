@@ -1,0 +1,87 @@
+# Unsigned macOS Apple Silicon build.
+# Ad-hoc signed (signingIdentity "-") so Gatekeeper does not call the app "damaged".
+# Users still allow it once: right-click → Open, or Privacy & Security → Open Anyway.
+#
+# Trigger:
+#   - Actions → Release → Run workflow  → download the artifact
+#   - git tag v0.1.0 && git push origin v0.1.0  → GitHub Release with the .dmg
+
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APPLE_SIGNING_IDENTITY: "-"
+
+jobs:
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build DMG
+        working-directory: apps/desktop
+        run: npm run tauri -- build --target aarch64-apple-darwin
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist-artifacts
+          find apps/desktop/src-tauri/target -path '*/bundle/dmg/*.dmg' -print -exec cp {} dist-artifacts/ \;
+          ls -lh dist-artifacts
+          ls dist-artifacts/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-apple-silicon-dmg
+          path: dist-artifacts/*.dmg
+          if-no-files-found: error
+
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-artifacts/*.dmg
+          generate_release_notes: true
+          body: |
+            macOS Apple Silicon (M1–M4), macOS 13+. Unsigned open-source build.
+
+            1. Open the `.dmg` and drag the app to Applications.
+            2. Right-click the app → **Open** → **Open**.
+            3. If it is still blocked: **System Settings → Privacy & Security → Open Anyway**.
+            4. If macOS says the app is damaged: `xattr -cr "/Applications/Worship Playback Engine.app"`
+
+            After first launch, install Homebrew tools if prompted (`brew install ffmpeg uv`), then install the Python environment and models from Diagnostics.
+
+            Lagu ibadah **tidak** ikut dalam installer. User memakai file audio sendiri.

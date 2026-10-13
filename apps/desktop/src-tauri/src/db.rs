@@ -273,7 +273,7 @@ impl Db {
                 s.cue_lead_beats,
                 s.notes,
                 s.last_error,
-                s.analysis.as_ref().map(|a| a.to_string()),
+                analysis_blob(s),
                 s.rendered.backing,
                 s.rendered.backup,
                 s.created_at,
@@ -657,13 +657,30 @@ pub fn schema_version(db: &Db) -> i64 {
     db.conn.lock().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0)
 }
 
+/// Persist the tempo map inside `analysis_json` so older databases need no new column.
+fn analysis_blob(song: &Song) -> Option<String> {
+    if song.analysis.is_none() && song.grid.is_none() {
+        return None;
+    }
+    let mut v = song.analysis.clone().unwrap_or_else(|| serde_json::json!({}));
+    if !v.is_object() {
+        v = serde_json::json!({});
+    }
+    if let Some(g) = &song.grid {
+        if let Ok(value) = serde_json::to_value(g) {
+            v["grid"] = value;
+        }
+    }
+    Some(v.to_string())
+}
+
 fn row_to_song(r: &Row) -> rusqlite::Result<Song> {
     let prep: String = r.get("prep_json")?;
     let routing: String = r.get("routing_json")?;
     let arr: String = r.get("arrangement_json")?;
     let analysis: Option<String> = r.get("analysis_json")?;
     let status: String = r.get("status")?;
-    Ok(Song {
+    let mut song = Song {
         id: r.get("id")?,
         title: r.get("title")?,
         artist: r.get("artist")?,
@@ -691,10 +708,17 @@ fn row_to_song(r: &Row) -> rusqlite::Result<Song> {
         notes: r.get("notes")?,
         last_error: r.get("last_error")?,
         analysis: analysis.and_then(|a| serde_json::from_str(&a).ok()),
+        grid: None,
         created_at: r.get("created_at")?,
         updated_at: r.get("updated_at")?,
         prepared_at: r.get("prepared_at")?,
-    })
+    };
+    song.grid = song
+        .analysis
+        .as_ref()
+        .and_then(|a| a.get("grid"))
+        .and_then(|g| serde_json::from_value(g.clone()).ok());
+    Ok(song)
 }
 
 fn load_song_children(c: &Connection, s: &mut Song) -> Result<()> {
@@ -752,6 +776,7 @@ mod tests {
             notes: String::new(),
             last_error: None,
             analysis: None,
+            grid: None,
             created_at: now_iso(),
             updated_at: now_iso(),
             prepared_at: None,

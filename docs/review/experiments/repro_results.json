@@ -1,0 +1,443 @@
+[
+ {
+  "case": "A control 96bpm, starts at 0",
+  "true_bpm": 96.0,
+  "bpm": 96.0,
+  "alts": [],
+  "true_beat1": 0.0,
+  "beat1": 12.5281,
+  "musical_start": 10.658,
+  "audio_start": 2.531,
+  "mode": "fixed",
+  "stability": 0.931,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.213,
+  "first_tracked_beat": 10.658,
+  "beat1_err_beats": 20.04,
+  "click_phase_err_at_end_ms": 28,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 41,
+  "raw_beats_count_vs_true": "96/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Verse 1",
+    10.028
+   ],
+   [
+    "Chorus",
+    30.028
+   ],
+   [
+    "Verse 2",
+    50.028
+   ],
+   [
+    "Chorus",
+    70.028
+   ],
+   [
+    "Bridge",
+    90.028
+   ],
+   [
+    "Chorus",
+    110.028
+   ],
+   [
+    "Outro",
+    130.028
+   ]
+  ],
+  "section_hits_within_0.1s": "7/7",
+  "section_hits_within_1bar": "7/7"
+ },
+ {
+  "case": "B 2.3s silence lead-in",
+  "true_bpm": 96.0,
+  "bpm": 96.0,
+  "alts": [],
+  "true_beat1": 2.3,
+  "beat1": 14.8287,
+  "musical_start": 12.957,
+  "audio_start": 2.322,
+  "mode": "fixed",
+  "stability": 0.931,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.201,
+  "first_tracked_beat": 12.957,
+  "beat1_err_beats": 20.05,
+  "click_phase_err_at_end_ms": 29,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 40,
+  "raw_beats_count_vs_true": "96/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Chorus",
+    9.829
+   ],
+   [
+    "Bridge",
+    129.829
+   ],
+   [
+    "Outro",
+    139.829
+   ]
+  ],
+  "section_hits_within_0.1s": "0/7",
+  "section_hits_within_1bar": "2/7"
+ },
+ {
+  "case": "C 2.3s silence + 1-beat pickup",
+  "true_bpm": 96.0,
+  "bpm": 96.0,
+  "alts": [],
+  "true_beat1": 2.3,
+  "beat1": 2.3301,
+  "musical_start": 1.695,
+  "audio_start": 1.695,
+  "mode": "fixed",
+  "stability": 0.932,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.219,
+  "first_tracked_beat": 1.695,
+  "beat1_err_beats": 0.05,
+  "click_phase_err_at_end_ms": 30,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 605,
+  "raw_beats_count_vs_true": "105/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Chorus",
+    9.83
+   ],
+   [
+    "Bridge",
+    129.83
+   ],
+   [
+    "Outro",
+    139.83
+   ]
+  ],
+  "section_hits_within_0.1s": "0/7",
+  "section_hits_within_1bar": "2/7"
+ },
+ {
+  "case": "D 8-bar soft pad intro (no drums) + 1.5s lead",
+  "true_bpm": 72.0,
+  "bpm": 72.0,
+  "alts": [
+   144.0
+  ],
+  "true_beat1": 1.5,
+  "beat1": 31.5271,
+  "musical_start": 29.025,
+  "audio_start": 1.533,
+  "mode": "fixed",
+  "stability": 0.942,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.225,
+  "first_tracked_beat": 37.361,
+  "beat1_err_beats": 36.03,
+  "click_phase_err_at_end_ms": 27,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 38,
+  "raw_beats_count_vs_true": "91/240",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Pre-Chorus",
+    11.527
+   ],
+   [
+    "Chorus",
+    24.86
+   ],
+   [
+    "Bridge",
+    184.86
+   ],
+   [
+    "Outro",
+    198.194
+   ]
+  ],
+  "section_hits_within_0.1s": "0/7",
+  "section_hits_within_1bar": "2/7"
+ },
+ {
+  "case": "E 2-bar intro (phrase misaligned)",
+  "true_bpm": 96.0,
+  "bpm": 96.0,
+  "alts": [],
+  "true_beat1": 0.8,
+  "beat1": 8.3288,
+  "musical_start": 6.455,
+  "audio_start": 0.836,
+  "mode": "fixed",
+  "stability": 0.931,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.255,
+  "first_tracked_beat": 6.455,
+  "beat1_err_beats": 12.05,
+  "click_phase_err_at_end_ms": 29,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 38,
+  "raw_beats_count_vs_true": "96/216",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Chorus",
+    8.329
+   ],
+   [
+    "Outro",
+    128.329
+   ]
+  ],
+  "section_hits_within_0.1s": "0/7",
+  "section_hits_within_1bar": "0/7"
+ },
+ {
+  "case": "F non-integer 71.8bpm click-recorded",
+  "true_bpm": 71.8,
+  "bpm": 71.8,
+  "alts": [
+   143.6
+  ],
+  "true_beat1": 0.5,
+  "beat1": 20.5817,
+  "musical_start": 18.065,
+  "audio_start": 0.534,
+  "mode": "fixed",
+  "stability": 0.98,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.203,
+  "first_tracked_beat": 23.081,
+  "beat1_err_beats": 24.03,
+  "click_phase_err_at_end_ms": 26,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 40,
+  "raw_beats_count_vs_true": "91/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Verse 1",
+    13.896
+   ],
+   [
+    "Chorus",
+    40.637
+   ],
+   [
+    "Verse 2",
+    67.378
+   ],
+   [
+    "Chorus",
+    94.119
+   ],
+   [
+    "Bridge",
+    120.86
+   ],
+   [
+    "Chorus",
+    147.601
+   ],
+   [
+    "Outro",
+    174.342
+   ]
+  ],
+  "section_hits_within_0.1s": "7/7",
+  "section_hits_within_1bar": "7/7"
+ },
+ {
+  "case": "H 72.15bpm (gets rounded to 72)",
+  "true_bpm": 72.15,
+  "bpm": 72.0,
+  "alts": [
+   144.0
+  ],
+  "true_beat1": 0.5,
+  "beat1": 17.1439,
+  "musical_start": 16.324,
+  "audio_start": 0.534,
+  "mode": "fixed",
+  "stability": 0.933,
+  "regions": 0,
+  "conf": 0.267,
+  "db_conf": 0.198,
+  "first_tracked_beat": 24.636,
+  "beat1_err_beats": 20.01,
+  "click_phase_err_at_end_ms": 398,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 40,
+  "raw_beats_count_vs_true": "90/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Verse 1",
+    13.811
+   ],
+   [
+    "Chorus",
+    40.477
+   ],
+   [
+    "Verse 2",
+    67.144
+   ],
+   [
+    "Chorus",
+    93.811
+   ],
+   [
+    "Bridge",
+    120.477
+   ],
+   [
+    "Chorus",
+    147.144
+   ],
+   [
+    "Outro",
+    173.811
+   ]
+  ],
+  "section_hits_within_0.1s": "2/7",
+  "section_hits_within_1bar": "7/7"
+ },
+ {
+  "case": "I breakdown: bridge w/o drums",
+  "true_bpm": 96.0,
+  "bpm": 96.0,
+  "alts": [],
+  "true_beat1": 0.5,
+  "beat1": 13.0231,
+  "musical_start": 12.399,
+  "audio_start": 0.534,
+  "mode": "fixed",
+  "stability": 0.931,
+  "regions": 0,
+  "conf": 0.99,
+  "db_conf": 0.277,
+  "first_tracked_beat": 11.146,
+  "beat1_err_beats": 20.04,
+  "click_phase_err_at_end_ms": 23,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 87,
+  "raw_beats_count_vs_true": "96/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Verse 1",
+    10.523
+   ],
+   [
+    "Chorus",
+    30.523
+   ],
+   [
+    "Verse 2",
+    50.523
+   ],
+   [
+    "Chorus",
+    70.523
+   ],
+   [
+    "Pre-Chorus",
+    90.523
+   ],
+   [
+    "Chorus",
+    110.523
+   ],
+   [
+    "Outro",
+    130.523
+   ]
+  ],
+  "section_hits_within_0.1s": "7/7",
+  "section_hits_within_1bar": "7/7"
+ },
+ {
+  "case": "G 124.6bpm + noise floor",
+  "true_bpm": 124.6,
+  "bpm": 124.6,
+  "alts": [
+   62.0
+  ],
+  "true_beat1": 1.0,
+  "beat1": 10.6632,
+  "musical_start": 9.218,
+  "audio_start": 0.07,
+  "mode": "fixed",
+  "stability": 0.878,
+  "regions": 0,
+  "conf": 1.0,
+  "db_conf": 0.244,
+  "first_tracked_beat": 9.218,
+  "beat1_err_beats": 20.07,
+  "click_phase_err_at_end_ms": 32,
+  "beat1_bar_aligned": true,
+  "raw_beats_max_err_ms": 44,
+  "raw_beats_count_vs_true": "96/224",
+  "sections": [
+   [
+    "Intro",
+    0.0
+   ],
+   [
+    "Chorus",
+    6.811
+   ],
+   [
+    "Bridge",
+    99.267
+   ],
+   [
+    "Outro",
+    106.971
+   ]
+  ],
+  "section_hits_within_0.1s": "0/7",
+  "section_hits_within_1bar": "2/7"
+ }
+]

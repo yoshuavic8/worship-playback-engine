@@ -1,0 +1,182 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1600px;height:1000px;background:#0d0e10;color:#e7e9ee;font:13px -apple-system,"SF Pro Text",Inter,system-ui,sans-serif;overflow:hidden}
+.top{height:64px;display:flex;align-items:center;gap:16px;padding:0 20px;border-bottom:1px solid #22252b;background:#121316}
+.title{font-size:18px;font-weight:600}.sub{color:#8a8f99;font-size:12px}
+.pill{display:flex;align-items:center;gap:8px;background:#1a1c20;border:1px solid #2a2d33;border-radius:10px;padding:6px 10px}
+.pill b{font-size:15px;font-variant-numeric:tabular-nums}.pill span{color:#8a8f99;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.ok{color:#5ad38a}.btn{background:#1f2227;border:1px solid #30343b;border-radius:8px;padding:7px 12px;font-weight:600}
+.primary{background:#f4b740;color:#1a1300;border-color:#f4b740}
+.transport{display:flex;gap:8px;align-items:center}
+.play{width:40px;height:40px;border-radius:50%;background:#f4b740;color:#111;display:grid;place-items:center;font-size:16px}
+.pos{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.main{display:flex;height:calc(100% - 64px - 34px)}
+.heads{width:210px;border-right:1px solid #22252b;background:#111215;flex-shrink:0}
+.lane-h{height:var(--h);display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1d2024}
+.lane-h .n{flex:1;font-weight:600}.ms{display:flex;gap:4px}.ms i{font-style:normal;width:22px;height:20px;border-radius:5px;border:1px solid #33373e;display:grid;place-items:center;font-size:10px;font-weight:700;color:#9aa0aa}
+.ms i.on{background:#f4b740;color:#111;border-color:#f4b740}.ms i.s{background:#4aa3ff;color:#06121f;border-color:#4aa3ff}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.tl{flex:1;position:relative;overflow:hidden}
+.ruler{height:34px;border-bottom:1px solid #2a2d33;position:relative;background:#141518}
+.bar{position:absolute;top:0;bottom:0;border-left:1px solid #2c3036;font-size:11px;color:#8a8f99;padding:3px 4px;font-variant-numeric:tabular-nums}
+.bar.major{color:#e7e9ee;border-left-color:#4a4f57}
+.lane{height:var(--h);border-bottom:1px solid #1d2024;position:relative}
+.clip{position:absolute;top:6px;bottom:6px;border-radius:7px;padding:6px 9px;font-weight:700;font-size:12px;overflow:hidden;border:1px solid;white-space:nowrap}
+.clip small{display:block;font-weight:500;opacity:.65;font-size:10.5px;margin-top:2px}
+.clip .hr{position:absolute;top:0;bottom:0;right:0;width:6px;background:rgba(255,255,255,.18)}
+.wave{position:absolute;inset:6px 0;opacity:.8}
+.cue{position:absolute;top:9px;height:24px;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:700;background:#1d3550;color:#8cc4ff;border:1px solid #2f5b88;white-space:nowrap}
+.cue:before{content:"🔊 "}
+.playhead{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 10px rgba(255,255,255,.6);z-index:6}
+.loop{position:absolute;top:0;height:34px;background:rgba(244,183,64,.16);border-left:2px solid #f4b740;border-right:2px solid #f4b740;z-index:3}
+.insp{width:300px;border-left:1px solid #22252b;background:#111215;padding:14px;display:flex;flex-direction:column;gap:12px;flex-shrink:0}
+.card{background:#16181b;border:1px solid #24272d;border-radius:12px;padding:12px}
+.card h4{font-size:11px;color:#8a8f99;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;display:flex;justify-content:space-between}
+.row{display:flex;justify-content:space-between;align-items:center;margin:6px 0}
+.seg{display:flex;gap:4px;flex-wrap:wrap}.seg span{border:1px solid #30343b;border-radius:6px;padding:4px 8px;font-size:11.5px}.seg span.on{background:#2a2d33;border-color:#5b6068;color:#fff}
+.status{height:34px;border-top:1px solid #22252b;background:#121316;display:flex;align-items:center;gap:22px;padding:0 16px;color:#8a8f99;font-size:12px}
+kbd{border:1px solid #3a3e45;border-radius:4px;padding:0 5px;font:11px ui-monospace,monospace;color:#c9ccd2}
+.conf{height:6px;border-radius:3px;background:#24272d;overflow:hidden;width:110px}.conf i{display:block;height:100%}
+/* tempo lane */
+.tempo-h{height:96px;border-bottom:1px solid #2a2d33;background:#121418;display:flex;padding:8px 0 8px 12px;position:relative}
+.tempo-h .l{flex:1;display:flex;flex-direction:column;justify-content:space-between}
+.tempo-h .t{display:flex;align-items:center;gap:8px;font-weight:600}
+.tools{display:flex;gap:6px;align-items:center}
+.ic{width:26px;height:22px;border-radius:6px;border:1px solid #33373e;display:grid;place-items:center;font-size:12px;color:#9aa0aa}
+.ic.on{background:#f4b740;border-color:#f4b740;color:#1a1300}
+.tog{display:flex;border:1px solid #33373e;border-radius:6px;overflow:hidden}.tog span{font-size:10.5px;font-weight:700;padding:3px 7px;color:#9aa0aa}.tog span.on{background:#2d3138;color:#fff}
+.yax{width:34px;position:relative;border-left:1px solid #22252b;margin:-8px 0}
+.yax span{position:absolute;right:6px;font-size:10px;color:#6f747d;transform:translateY(-50%);font-variant-numeric:tabular-nums}
+.tempo{height:96px;border-bottom:1px solid #2a2d33;position:relative;background:linear-gradient(#131519,#111316)}
+.tip{position:absolute;background:#f7f8fa;color:#111;border-radius:8px;padding:5px 9px;font-size:11.5px;font-weight:700;white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.5);z-index:8;font-variant-numeric:tabular-nums}
+.tip small{display:block;font-weight:500;color:#555;font-size:10px}
+.tip:after{content:"";position:absolute;left:50%;bottom:-5px;margin-left:-5px;border:5px solid transparent;border-bottom:0;border-top-color:#f7f8fa}
+.hint{position:absolute;font-size:10.5px;color:#c9ccd2;background:rgba(20,22,26,.92);border:1px solid #34383f;border-radius:6px;padding:3px 7px;white-space:nowrap;z-index:7}
+.chip{position:absolute;top:3px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px;white-space:nowrap;font-variant-numeric:tabular-nums;z-index:2}
+</style></head><body>
+<div class="top">
+  <div><div class="title">Kau Setia Selamanya</div><div class="sub">Komunitas Pujian · D · 4/4</div></div>
+  <div class="transport" style="margin-left:18px"><div class="btn">⏮</div><div class="play">▶</div><div class="btn">⟲ Loop</div></div>
+  <div class="pos">40 . 3 . 1</div><div class="sub" style="margin-left:-8px">2:14.04</div>
+  <div class="pill"><span>Tempo</span><b>71.63</b><span style="color:#f4b740">● ramp</span></div>
+  <div class="pill"><span>Beat 1</span><b>2.320 s</b><span class="ok">94%</span></div>
+  <div class="pill"><span>Grid</span><b>Tempo map</b><span class="sub">3 pts</span></div>
+  <div style="flex:1"></div>
+  <div class="btn">↶ Undo</div><div class="btn">Snap: Beat ▾</div><div class="btn primary">Done</div>
+</div>
+<div class="main">
+  <div class="heads">
+    <div style="height:34px;border-bottom:1px solid #2a2d33;display:flex;align-items:center;padding:0 12px;color:#8a8f99;font-size:11px">BARS</div>
+    <div class="tempo-h">
+      <div class="l">
+        <div class="t"><span class="dot" style="background:#f4b740"></span>Tempo<span class="sub" style="font-weight:500">BPM</span></div>
+        <div class="tools"><div class="ic" title="Select">↖</div><div class="ic on" title="Draw (B)">✎</div><div class="tog"><span>Step</span><span class="on">Ramp</span></div></div>
+      </div>
+      <div class="yax" id="yax"></div>
+    </div>
+    <div class="lane-h" style="--h:58px"><span class="dot" style="background:#9aa0aa"></span><span class="n">Arrangement</span></div>
+    <div class="lane-h" style="--h:44px"><span class="dot" style="background:#4aa3ff"></span><span class="n">Cues</span><div class="ms"><i class="on">M</i></div></div>
+    <div class="lane-h" style="--h:58px"><span class="dot" style="background:#ddd"></span><span class="n">Click</span><div class="ms"><i>M</i></div></div>
+    <div class="lane-h" style="--h:68px"><span class="dot" style="background:#ff7a59"></span><span class="n">Drums</span><div class="ms"><i>M</i><i>S</i></div></div>
+    <div class="lane-h" style="--h:68px"><span class="dot" style="background:#b78cff"></span><span class="n">Bass</span><div class="ms"><i>M</i><i>S</i></div></div>
+    <div class="lane-h" style="--h:68px"><span class="dot" style="background:#5ad38a"></span><span class="n">Guitar</span><div class="ms"><i>M</i><i>S</i></div></div>
+    <div class="lane-h" style="--h:68px"><span class="dot" style="background:#4ad1d1"></span><span class="n">Keys / Other</span><div class="ms"><i>M</i><i class="s">S</i></div></div>
+    <div class="lane-h" style="--h:68px"><span class="dot" style="background:#888"></span><span class="n" style="color:#8a8f99">Vocals (guide)</span><div class="ms"><i class="on">M</i><i>S</i></div></div>
+  </div>
+  <div class="tl" id="tl"></div>
+  <div class="insp">
+    <div class="card"><h4>Beat grid <span style="color:#f4b740;letter-spacing:0">Tempo map · 3 points</span></h4>
+      <div class="row"><span>Beat 1</span><b>2.320 s</b></div>
+      <div class="row"><span class="sub">Confidence</span><div class="conf"><i style="width:92%;background:#5ad38a"></i></div></div>
+      <div style="margin:10px 0 6px;font-size:11px;color:#8a8f99">POINTS</div>
+      <div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;row-gap:5px;font-size:12px;font-variant-numeric:tabular-nums" id="ptable"></div>
+    </div>
+    <div class="card" style="border-color:#5a4a22;background:#19170f"><h4>Selected point <span style="color:#e7e9ee;letter-spacing:0">#3</span></h4>
+      <div class="row"><span class="sub">Bar</span><b>45 . 1 . 1</b></div>
+      <div class="row"><span class="sub">Time</span><b>2:29.74</b></div>
+      <div class="row"><span class="sub">BPM</span><div style="display:flex;gap:4px;align-items:center"><span class="ic">−</span><b style="font-size:16px;padding:0 6px">66.00</b><span class="ic">+</span></div></div>
+      <div class="row"><span class="sub">Curve (from this point)</span></div>
+      <div class="seg"><span class="on">▁ Step / Hold</span><span>⟋ Ramp</span></div>
+      <div class="row" style="margin-top:10px"><span class="sub">Incoming</span><b style="font-size:12px">Ramp 76.00 → 66.00 · 8 bars</b></div>
+    </div>
+    <div class="card"><h4>Shortcuts</h4>
+      <div class="sub" style="line-height:1.85"><kbd>B</kbd> draw · <kbd>dbl-click</kbd> add point · drag ↕ BPM (<kbd>⇧</kbd> fine) · drag ↔ snap beat · <kbd>⌫</kbd> delete · <kbd>R</kbd> step/ramp · <kbd>⌘Z</kbd> undo · <kbd>Space</kbd> play · <kbd>L</kbd> loop</div>
+    </div>
+  </div>
+</div>
+<div class="status"><span>Count-in <b style="color:#e7e9ee">1 bar @ 71.80</b></span><span>Snap <b style="color:#e7e9ee">Beat</b></span><span>Timeline: time-linear — bars widen when tempo slows</span><span style="flex:1"></span><span>Double-click the tempo line to add a point · drag dots · right-click a segment for Step / Ramp</span></div>
+<script>
+// ---- tempo map (bars are 1-based musical bars, 4/4) ----
+const MAP=[{bar:1,bpm:71.8,curve:'step'},{bar:37,bpm:76,curve:'ramp'},{bar:45,bpm:66,curve:'step'}];
+const BEAT1=2.32, BPB=4;
+function bpmAtBeat(b){ // b = beats since Beat 1 (0-based)
+  const bar=b/BPB+1; let i=0; while(i+1<MAP.length&&MAP[i+1].bar<=bar)i++;
+  const p=MAP[i],n=MAP[i+1]; if(p.curve==='ramp'&&n){return p.bpm+(n.bpm-p.bpm)*(bar-p.bar)/(n.bar-p.bar)} return p.bpm;}
+// integrate beat times
+const beatT=[BEAT1]; for(let k=0;k<57*BPB;k++){let t=beatT[k];const s=16;for(let j=0;j<s;j++)t+=60/bpmAtBeat(k+(j+.5)/s)/s;beatT.push(t)}
+const barT=bar=>{const f=(bar-1)*BPB,k=Math.floor(f);return beatT[k]+(beatT[k+1]-beatT[k])*(f-k)};
+// ---- view ----
+const W=1090, x0=14, tv0=barT(21)-1.2, tv1=barT(57)+1.0, pps=(W-x0-6)/(tv1-tv0);
+const X=t=>x0+(t-tv0)*pps;
+const YMIN=60,YMAX=90,PT=12,PB=84; const Y=b=>PB-(b-YMIN)/(YMAX-YMIN)*(PB-PT);
+let ya='';[90,80,70,60].forEach(v=>ya+=`<span style="top:${Y(v)}px">${v}</span>`);document.getElementById('yax').innerHTML=ya;
+let h='<div class="ruler">';
+for(let b=21;b<=57;b++){const x=X(barT(b));h+=`<div class="bar ${b%4==1?'major':''}" style="left:${x}px">${b%2==1?b:''}</div>`}
+h+=`<div class="loop" style="left:${X(barT(37))}px;width:${X(barT(45))-X(barT(37))}px"></div></div>`;
+// tempo lane
+h+='<div class="tempo"><svg width="'+W+'" height="96" style="position:absolute;left:0;top:0">';
+[90,80,70,60].forEach(v=>h+=`<line x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" stroke="#ffffff" stroke-opacity="${v==60||v==90?0.05:0.07}" ${v%20?'stroke-dasharray="2 4"':''}/>`);
+for(let b=21;b<=57;b+=4){const x=X(barT(b));h+=`<line x1="${x}" x2="${x}" y1="0" y2="96" stroke="#fff" stroke-opacity=".05"/>`}
+// line path sampled per beat/8
+let pts=[];const jumps=MAP.slice(1).map(m=>(m.bar-1)*BPB);
+for(let f=(21-1)*BPB-4;f<=56*BPB;f+=0.125){const k=Math.floor(f);const t=beatT[k]+(beatT[k+1]-beatT[k])*(f-k);
+ if(jumps.includes(f)){pts.push([X(t),Y(bpmAtBeat(f-1e-6))])}
+ pts.push([X(t),Y(bpmAtBeat(f))])}
+// insert vertical step at bar 37
+const area='M'+pts[0][0]+',96 L'+pts.map(p=>p.join(',')).join(' L')+' L'+pts.at(-1)[0]+',96 Z';
+h+=`<defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4b740" stop-opacity=".22"/><stop offset="1" stop-color="#f4b740" stop-opacity="0"/></linearGradient></defs>`;
+h+=`<path d="${area}" fill="url(#tg)"/><polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#f4b740" stroke-width="2" stroke-linejoin="round"/>`;
+// point dots
+const p2x=X(barT(37)),p3x=X(barT(45));
+h+=`<line x1="${p2x}" x2="${p2x}" y1="${Y(76)}" y2="96" stroke="#f4b740" stroke-opacity=".35" stroke-dasharray="3 3"/>`;
+h+=`<circle cx="${p2x}" cy="${Y(76)}" r="5" fill="#111" stroke="#f4b740" stroke-width="2"/>`;
+h+=`<circle cx="${p3x}" cy="${Y(66)}" r="9" fill="#f4b740" fill-opacity=".18"/><circle cx="${p3x}" cy="${Y(66)}" r="6" fill="#f4b740" stroke="#fff" stroke-width="2"/>`;
+// hover ghost point on flat segment
+const gx=X(barT(29.5));h+=`<circle cx="${gx}" cy="${Y(71.8)}" r="4.5" fill="none" stroke="#fff" stroke-opacity=".7" stroke-dasharray="2 2"/>`;
+h+='</svg>';
+h+=`<div class="chip" style="left:${X(barT(21))+4}px;background:#2a2410;color:#f4b740">◂ #1 · Bar 1 · 71.80 Step</div>`;
+h+=`<div class="chip" style="left:${p2x-74}px;top:${Y(76)-9}px;background:#2a2410;color:#f4b740">#2 76.00 Ramp</div>`;
+h+=`<div class="tip" style="left:${p3x-62}px;top:${Y(66)-50}px">Bar 45.1 · 66.00 BPM<small>Step · drag ↕ BPM, ⇧ fine</small></div>`;
+h+=`<div class="hint" style="left:${gx+9}px;top:${Y(71.8)+8}px">✎ Double-click to add point</div>`;
+h+=`<div class="hint" style="left:${X(barT(49.6))}px;top:6px;color:#8a8f99">ritardando 76 → 66 over Bridge</div>`;
+h+='</div>';
+// arrangement
+const secs=[["Verse 2",21,8,"#4aa3ff"],["Chorus 2",29,8,"#f4b740"],["Bridge",37,8,"#ff6fa8"],["Chorus 3",45,8,"#f4b740"],["Outro",53,4,"#9aa0aa"]];
+h+='<div class="lane" style="--h:58px">';
+secs.forEach(([n,s,l,c])=>{const a=X(barT(s)),b=X(barT(s+l));h+=`<div class="clip ${n=='Bridge'?'':''}" style="left:${Math.max(a,0)+1}px;width:${b-Math.max(a,0)-3}px;background:${c}22;border-color:${c}88;color:${c}">${n}<small>${l} bars · bar ${s}</small><div class="hr"></div></div>`});
+h+='</div><div class="lane" style="--h:44px">';
+[["Chorus",28],["Bridge",36],["Slow down",41],["Chorus",44.25],["Ending",52]].forEach(([n,b],i)=>{h+=`<div class="cue" style="left:${X(barT(b))}px;${n=='Slow down'?'top:9px;background:#3a2a12;color:#f4c46a;border-color:#6b5222':''}">${n}</div>`});
+h+='</div>';
+// click lane: ticks follow integrated beat times
+h+='<div class="lane" style="--h:58px">';
+h+=`<div style="position:absolute;left:${p2x}px;width:${p3x-p2x}px;top:0;bottom:0;background:linear-gradient(90deg,rgba(244,183,64,.10),rgba(244,183,64,.02))"></div>`;
+h+=`<div style="position:absolute;left:${p3x}px;right:0;top:0;bottom:0;background:rgba(74,163,255,.05)"></div>`;
+for(let k=(21-1)*BPB-4;k<=56*BPB;k++){const x=X(beatT[k]);if(x<0||x>W)continue;const acc=k%BPB==0;h+=`<div style="position:absolute;left:${x}px;top:${acc?22:32}px;width:2px;height:${acc?28:14}px;border-radius:1px;background:${acc?'#f4b740':'#7a7f88'}"></div>`}
+h+=`<div class="chip" style="left:${X(barT(22))}px;top:2px;background:#22252b;color:#c9ccd2">♩ 71.80 · bar ${(60/71.8*4).toFixed(2)}s</div>`;
+h+=`<div class="chip" style="left:${p2x+4}px;top:2px;background:#2a2410;color:#f4b740">♩ 76 → 66 · bars widen</div>`;
+h+=`<div class="chip" style="left:${p3x+4}px;top:2px;background:#16263a;color:#8cc4ff">♩ 66.00 · bar ${(60/66*4).toFixed(2)}s</div>`;
+h+='</div>';
+// stems
+const cols=["#ff7a59","#b78cff","#5ad38a","#4ad1d1","#666"];
+const energyAtT=t=>{let bar=21;for(let b=21;b<58;b++)if(barT(b)<=t)bar=b;if(t>barT(57))return 0.05;if(bar<29)return .55;if(bar<37)return .95;if(bar<45)return .7;if(bar<53)return 1;return .35};
+cols.forEach((c,k)=>{h+=`<div class="lane" style="--h:68px"><svg class="wave" width="${W}" height="56">`;
+ let p='';for(let x=0;x<W;x+=3){const t=tv0+(x-x0)/pps;let e=energyAtT(t);if(k==4)e*=0.6;const a=(k==0?(Math.abs(Math.sin(x*0.35))**6):(0.5+0.5*Math.abs(Math.sin(x*0.13+k))))*e*24+0.5;p+=`<rect x="${x}" y="${28-a}" width="2" height="${2*a}"/>`}
+ h+=`<g fill="${c}" opacity="${k==4?0.35:0.75}">${p}</g></svg></div>`});
+// vertical link guides
+[p2x,p3x].forEach(x=>h+=`<div style="position:absolute;left:${x}px;top:130px;bottom:0;width:0;border-left:1px dashed rgba(244,183,64,.28);z-index:1"></div>`);
+h+=`<div class="playhead" style="left:${X(barT(40.5))}px"></div>`;
+document.getElementById('tl').innerHTML=h;
+// points table
+let pt='';MAP.forEach((p,i)=>{const sel=i==2;const c=sel?'color:#f4b740;font-weight:700':'';pt+=`<span style="${c}">#${i+1}</span><span style="${c}">Bar ${p.bar}.1</span><span style="${c}">${p.bpm.toFixed(2)}</span><span style="${c};color:${sel?'#f4b740':'#8a8f99'}">${p.curve=='step'?'Step':'Ramp'}</span>`});
+document.getElementById('ptable').innerHTML=pt;
+</script></body></html>

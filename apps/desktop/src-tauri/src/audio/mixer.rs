@@ -51,6 +51,8 @@ pub struct Segment {
     pub end: u64,
     /// Pre-rendered spoken cue for this segment (played before the segment begins).
     pub cue: Option<Arc<AudioBuffer>>,
+    /// Song frame at which this segment's cue should start (N beats before it, from the tempo map).
+    pub cue_at: Option<u64>,
 }
 
 pub struct LoadedSong {
@@ -112,6 +114,8 @@ pub enum MixerCmd {
     SetLevels(MixLevels),
     SetBusMap(BusMap),
     SetClickVoices(Box<ClickVoices>),
+    /// Swap the click table. Built off the audio thread; the mixer only moves the vec.
+    SetBeatTable { grid: BeatGrid, cue_at: Vec<Option<u64>> },
     Test(Box<TestSignal>),
     StopTest,
 }
@@ -167,6 +171,16 @@ struct Voice {
     pos: u64,
 }
 
+struct CountInPlan {
+    map: bool,
+    period: f64,
+    land_q: i64,
+    land: u64,
+    seek: bool,
+    beats: u32,
+    total: u64,
+}
+
 pub struct Mixer {
     rx: Receiver<MixerCmd>,
     garbage: Sender<Box<LoadedSong>>,
@@ -178,10 +192,20 @@ pub struct Mixer {
     queued: Option<usize>,
     looping: bool,
     cue_fired: bool,
+    /// Next beat index for fixed-tempo arithmetic mode.
     next_beat: i64,
+    /// Next index into `grid.explicit_beats` for explicit-beat mode.
+    next_explicit_beat: usize,
     preroll_total: u64,
     preroll_pos: u64,
     next_pre_beat: u64,
+    /// Count-in driven by the tempo map. `ci_map` is false for a legacy fixed grid.
+    ci_map: bool,
+    ci_period: f64,
+    ci_land_q: i64,
+    ci_land: u64,
+    ci_seek: bool,
+    ci_beats: u32,
     click_voices: ClickVoices,
     click_voice: Option<(bool, usize)>,
     cue_voice: Option<Voice>,
@@ -215,9 +239,16 @@ impl Mixer {
             looping: false,
             cue_fired: false,
             next_beat: 0,
+            next_explicit_beat: 0,
             preroll_total: 0,
             preroll_pos: 0,
             next_pre_beat: 0,
+            ci_map: false,
+            ci_period: 0.0,
+            ci_land_q: 0,
+            ci_land: 0,
+            ci_seek: false,
+            ci_beats: 0,
             click_voices,
             click_voice: None,
             cue_voice: None,
@@ -230,9 +261,63 @@ impl Mixer {
         }
     }
 
+    fn count_in_plan(&self) -> Option<CountInPlan> {
+        if !matches!(self.transport, Transport::Idle | Transport::Panic | Transport::Paused) {
+            return None;
+        }
+        let song = self.song.as_ref()?;
+        let g = song.grid.as_ref()?;
+        if song.count_in_beats == 0 {
+            return None;
+        }
+        let sr = self.status.sample_rate.load(Ordering::Relaxed).max(1);
+        let downbeat = g.first_downbeat_frame();
+        let at_section = song.segments.iter().rev().find(|s| s.start <= self.pos).map(|s| s.start);
+        let (land, seek) = if self.pos <= downbeat {
+            (downbeat, self.pos < downbeat && downbeat < song.frames)
+        } else if let Some(start) = at_section {
+            if self.pos <= start.saturating_add(512) { (start, false) } else { (self.pos, false) }
+        } else {
+            (self.pos, false)
+        };
+        if let Some(bpm) = g.bpm_at_frame(land).filter(|b| *b >= 20.0) {
+            let period = sr as f64 * 60.0 / bpm;
+            let land_q = g
+                .explicit_beats
+                .iter()
+                .min_by_key(|b| (b.frame as i64 - land as i64).unsigned_abs())
+                .map(|b| b.q as i64)
+                .unwrap_or(0);
+            Some(CountInPlan {
+                map: true,
+                period,
+                land_q,
+                land,
+                seek,
+                beats: song.count_in_beats,
+                total: (period * song.count_in_beats as f64).round() as u64,
+            })
+        } else {
+            Some(CountInPlan {
+                map: false,
+                period: g.frames_per_beat,
+                land_q: 0,
+                land,
+                seek,
+                beats: song.count_in_beats,
+                total: (g.frames_per_beat * song.count_in_beats as f64).round() as u64,
+            })
+        }
+    }
+
     fn sync_beat(&mut self) {
-        if let Some(g) = self.song.as_ref().and_then(|s| s.grid) {
-            self.next_beat = g.beat_at_or_after(self.pos);
+        if let Some(g) = self.song.as_ref().map(|s| &s.grid).and_then(|g| g.as_ref()) {
+            if g.has_explicit_beats() {
+                // Explicit mode: seek to the first beat at or after current position.
+                self.next_explicit_beat = g.explicit_beat_at_or_after(self.pos);
+            } else {
+                self.next_beat = g.beat_at_or_after(self.pos);
+            }
         }
     }
 
@@ -285,22 +370,30 @@ impl Mixer {
                 if fresh && self.pos >= frames {
                     self.rewind();
                 }
-                let song = self.song.as_ref().unwrap();
-                match (count_in, song.grid, self.transport) {
-                    (true, Some(g), Transport::Idle | Transport::Panic | Transport::Paused)
-                        if song.count_in_beats > 0 =>
-                    {
-                        self.preroll_total = (g.frames_per_beat * song.count_in_beats as f64).round() as u64;
-                        self.preroll_pos = 0;
-                        self.next_pre_beat = 0;
-                        self.transport = Transport::CountIn;
-                        if song.cue_enabled {
-                            if let Some(cue) = song.segments.get(self.cur_seg).and_then(|s| s.cue.clone()) {
-                                self.cue_voice = Some(Voice { buf: cue, pos: 0 });
-                            }
-                        }
+                let plan = if count_in { self.count_in_plan() } else { None };
+                let cue = self.song.as_ref().and_then(|song| {
+                    if plan.is_some() && song.cue_enabled {
+                        song.segments.get(self.cur_seg).and_then(|s| s.cue.clone())
+                    } else {
+                        None
                     }
-                    _ => self.transport = Transport::Playing,
+                });
+                if let Some(plan) = plan {
+                    self.ci_map = plan.map;
+                    self.ci_period = plan.period;
+                    self.ci_land_q = plan.land_q;
+                    self.ci_land = plan.land;
+                    self.ci_seek = plan.seek;
+                    self.ci_beats = plan.beats;
+                    self.preroll_total = plan.total;
+                    self.preroll_pos = 0;
+                    self.next_pre_beat = 0;
+                    self.transport = Transport::CountIn;
+                    if let Some(cue) = cue {
+                        self.cue_voice = Some(Voice { buf: cue, pos: 0 });
+                    }
+                } else {
+                    self.transport = Transport::Playing;
                 }
                 self.sync_beat();
             }
@@ -407,6 +500,15 @@ impl Mixer {
                 self.click_voice = None;
                 self.click_voices = *v;
             }
+            MixerCmd::SetBeatTable { grid, cue_at } => {
+                if let Some(song) = self.song.as_mut() {
+                    for (seg, at) in song.segments.iter_mut().zip(cue_at.into_iter()) {
+                        seg.cue_at = at;
+                    }
+                    song.grid = Some(grid);
+                }
+                self.sync_beat();
+            }
             MixerCmd::Test(t) => {
                 let t = *t;
                 self.test_voice = Some((Voice { buf: t.buf, pos: 0 }, t.to_foh, t.to_mon));
@@ -482,17 +584,54 @@ impl Mixer {
             if let Some(song) = self.song.as_mut() {
                 match self.transport {
                     Transport::CountIn => {
-                        if let Some(g) = song.grid {
+                        if let Some(g) = song.grid.as_ref() {
                             if self.preroll_pos >= self.next_pre_beat {
-                                let k = (self.next_pre_beat as f64 / g.frames_per_beat).round() as i64;
-                                click_trigger = Some(g.is_accent(k));
-                                self.next_pre_beat = (g.frames_per_beat * (k + 1) as f64).round() as u64;
+                                let period = if self.ci_map { self.ci_period } else { g.frames_per_beat };
+                                let k = (self.next_pre_beat as f64 / period.max(1.0)).round() as i64;
+                                let accent = if self.ci_map {
+                                    let q = self.ci_land_q - (self.ci_beats as i64 - k);
+                                    crate::audio::click::is_bar_accent(q.rem_euclid(g.beats_per_bar.max(1) as i64), g.beats_per_bar)
+                                } else {
+                                    g.is_accent_fixed(k)
+                                };
+                                click_trigger = Some(accent);
+                                self.next_pre_beat = (period * (k + 1) as f64).round() as u64;
                             }
                         }
                         self.preroll_pos += 1;
                         if self.preroll_pos >= self.preroll_total {
                             self.transport = Transport::Playing;
-                            self.next_beat = song.grid.map(|g| g.beat_at_or_after(self.pos)).unwrap_or(0);
+                            // Count-in ends on Beat 1 (or the section downbeat). Audio before
+                            // that downbeat is skipped so the drummer's "1" is the music's "1".
+                            if self.ci_map {
+                                if self.ci_seek && self.ci_land < song.frames {
+                                    self.pos = self.ci_land;
+                                    if let Some(idx) = song.segments.iter().position(|s| self.pos < s.end) {
+                                        if idx != self.cur_seg {
+                                            self.cur_seg = idx;
+                                            self.cue_fired = false;
+                                        }
+                                    }
+                                }
+                            } else if let Some(g) = song.grid.as_ref() {
+                                let downbeat = g.first_downbeat_frame();
+                                if self.pos < downbeat && downbeat < song.frames {
+                                    self.pos = downbeat;
+                                    if let Some(idx) = song.segments.iter().position(|s| downbeat < s.end) {
+                                        if idx != self.cur_seg {
+                                            self.cur_seg = idx;
+                                            self.cue_fired = false;
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(g) = song.grid.as_ref() {
+                                if g.has_explicit_beats() {
+                                    self.next_explicit_beat = g.explicit_beat_at_or_after(self.pos);
+                                } else {
+                                    self.next_beat = g.beat_at_or_after(self.pos);
+                                }
+                            }
                         }
                     }
                     Transport::Playing => {
@@ -513,8 +652,14 @@ impl Mixer {
                                         let target = song.segments[n].start;
                                         if target != self.pos {
                                             self.pos = target;
-                                            self.next_beat =
-                                                song.grid.map(|g| g.beat_at_or_after(self.pos)).unwrap_or(0);
+                                            // Re-sync beat index for both fixed and explicit modes
+                                            if let Some(g) = song.grid.as_ref() {
+                                                if g.has_explicit_beats() {
+                                                    self.next_explicit_beat = g.explicit_beat_at_or_after(self.pos);
+                                                } else {
+                                                    self.next_beat = g.beat_at_or_after(self.pos);
+                                                }
+                                            }
                                         }
                                         self.cur_seg = n;
                                         self.cue_fired = false;
@@ -539,7 +684,11 @@ impl Mixer {
                                         None
                                     })
                                 };
-                                if self.pos + song.cue_lead_frames >= seg.end {
+                                let due = match next.and_then(|n| song.segments.get(n).and_then(|s| s.cue_at)) {
+                                    Some(at) => self.pos >= at,
+                                    None => self.pos + song.cue_lead_frames >= seg.end,
+                                };
+                                if due {
                                     self.cue_fired = true;
                                     if let Some(c) = next.and_then(|n| song.segments[n].cue.clone()) {
                                         self.cue_voice = Some(Voice { buf: c, pos: 0 });
@@ -547,13 +696,31 @@ impl Mixer {
                                 }
                             }
                             // Click on the beat grid (song time, so it survives arrangement jumps).
-                            if let Some(g) = song.grid {
-                                let bf = g.beat_frame(self.next_beat);
-                                if (self.pos as f64) >= bf.round() {
-                                    if song.click_enabled {
-                                        click_trigger = Some(g.is_accent(self.next_beat));
+                            // Explicit beats mode is preferred for live recordings (follows music);
+                            // fixed formula is used for studio recordings.
+                            if let Some(g) = &song.grid {
+                                if g.has_explicit_beats() {
+                                    // Walk forward through explicit beats table.
+                                    while self.next_explicit_beat < g.explicit_beats.len() {
+                                        let entry = g.explicit_beats[self.next_explicit_beat];
+                                        if self.pos >= entry.frame {
+                                            if song.click_enabled {
+                                                click_trigger = Some(entry.is_accent);
+                                            }
+                                            self.next_explicit_beat += 1;
+                                        } else {
+                                            break;
+                                        }
                                     }
-                                    self.next_beat += 1;
+                                } else {
+                                    // Fixed-tempo arithmetic (original algorithm).
+                                    let bf = g.beat_frame(self.next_beat);
+                                    if (self.pos as f64) >= bf.round() {
+                                        if song.click_enabled {
+                                            click_trigger = Some(g.is_accent_fixed(self.next_beat));
+                                        }
+                                        self.next_beat += 1;
+                                    }
                                 }
                             }
                             for t in song.tracks.iter_mut() {
@@ -691,7 +858,7 @@ mod tests {
             generation: 1,
             tracks: vec![Track::new(TrackRole::Backing, backing, 1.0, true, true)],
             frames,
-            segments: segments.into_iter().map(|(s, e)| Segment { start: s, end: e, cue: cue.clone() }).collect(),
+            segments: segments.into_iter().map(|(s, e)| Segment { start: s, end: e, cue: cue.clone(), cue_at: None }).collect(),
             start_segment: 0,
             grid: BeatGrid::new(120.0, 0.0, 4, SR),
             click_enabled: true,
@@ -833,5 +1000,33 @@ mod tests {
         run(&mut m, SR as usize * 2, 2);
         assert_eq!(status.transport.load(Ordering::Relaxed), transport::PLAYING);
         assert!(status.position.load(Ordering::Relaxed) > 0);
+    }
+
+    /// Count-in is whole bars of click, then the song enters on beat 1.
+    /// Audio before the downbeat must not play, or the drummer comes in early.
+    #[test]
+    fn count_in_lands_on_first_downbeat() {
+        let bus = BusMap { foh: OutputTarget::Stereo { left: 0, right: 1 }, monitor: OutputTarget::None };
+        let (mut m, tx, status) = setup(bus);
+        let b = Arc::new(AudioBuffer::silent(SR as usize * 8, SR));
+        let mut s = song(b, vec![(0, SR as u64 * 8)], None);
+        // Beat 1 is one second in. At 120 BPM a beat is 0.5 s, so the old path
+        // would play two weak clicks before the downbeat and the entrance would be late.
+        s.grid = BeatGrid::new(120.0, 1.0, 4, SR);
+        tx.send(MixerCmd::Load(s)).unwrap();
+        tx.send(MixerCmd::Play { count_in: true }).unwrap();
+        run(&mut m, SR as usize, 2);
+        assert_eq!(status.transport.load(Ordering::Relaxed), transport::COUNT_IN);
+        assert_eq!(status.position.load(Ordering::Relaxed), 0);
+        // 4 beats of count-in is 2 s. Three seconds total means one second of music
+        // that must start at the downbeat (frame 48000), not at frame 0.
+        run(&mut m, SR as usize * 2, 2);
+        assert_eq!(status.transport.load(Ordering::Relaxed), transport::PLAYING);
+        let pos = status.position.load(Ordering::Relaxed);
+        let downbeat = SR as u64;
+        assert!(
+            (downbeat..downbeat + SR as u64 + 512).contains(&pos),
+            "song entered at frame {pos}, expected beat 1 ({downbeat}) plus about one second"
+        );
     }
 }

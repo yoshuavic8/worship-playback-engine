@@ -6,7 +6,6 @@ validate → FFmpeg normalise → stem separation → bass adjustment / backing 
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -15,8 +14,10 @@ import numpy as np
 from .analysis.key import detect_key
 from .analysis.sections import detect_sections
 from .analysis.tempo import detect_tempo
+from .analysis.tempo_map import propose_grid
 from .audio import io
-from .protocol import PrepareRequest, WorkerError, emit, log, progress
+from .audio.clean import polish
+from .protocol import PrepareRequest, WorkerError, dumps, emit, log, progress
 from .rendering.backing import render_backing
 from .rendering.waveform import peaks
 from .separation.base import STEMS
@@ -68,6 +69,11 @@ def run(req: PrepareRequest) -> dict:
         sep_list = candidates(req.separation)
         if not sep_list:
             raise WorkerError("model_missing", "No separation engine with installed model is available")
+        if req.separation.profile == "worship" and sep_list[0].name != "worship":
+            warnings.append(
+                "UVR-MDX-NET Inst HQ 3 is not installed, so vocal removal used Demucs only. "
+                "Download it in Diagnostics → AI Models for live recordings."
+            )
         last_error: Exception | None = None
         for sep in sep_list:
             try:
@@ -87,7 +93,7 @@ def run(req: PrepareRequest) -> dict:
             a = res.stems.get(name)
             if a is None:
                 continue
-            a = io.fit_length(io.resample(a, res.sample_rate, sr), mix.shape[-1])
+            a = polish(io.fit_length(io.resample(a, res.sample_rate, sr), mix.shape[-1]), sr)
             stems[name] = a
             rel = f"stems/{name}.wav"
             io.write(str(song / rel), a, sr)
@@ -135,18 +141,79 @@ def run(req: PrepareRequest) -> dict:
         key, key_conf = detect_key(harmonic if harmonic is not None else y, 22050)
         p.stage("analyze", 0.6, "Detecting sections")
         sections = detect_sections(y, 22050, tempo.bpm, tempo.beat_offset, bpb)
+
+        # Build the full analysis dict — all new fields flow through the free-form
+        # analysis_json column in SQLite so NO schema migration is required.
         analysis = {
-            "bpm": tempo.bpm, "bpmConfidence": tempo.confidence, "beatOffset": tempo.beat_offset,
+            # --- existing fields (consumed by Rust prep.rs / player.rs) ---
+            "bpm": tempo.bpm,
+            "bpmConfidence": tempo.confidence,
+            "beatOffset": tempo.beat_offset,
             "bpmAlternatives": tempo.alternatives,
-            "key": key, "keyConfidence": key_conf, "timeSignature": req.time_signature,
-            "duration": round(duration, 3), "sections": sections,
+            "key": key,
+            "keyConfidence": key_conf,
+            "timeSignature": req.time_signature,
+            "duration": round(duration, 3),
+            "sections": sections,
+
+            # --- new timeline fields ---
+            "audioStart": tempo.audio_start,
+            "musicalStart": tempo.musical_start,
+
+            # --- tempo stability / mode ---
+            "tempoMode": tempo.tempo_mode,         # "fixed" | "drifting" | "changing"
+            "stability": tempo.stability,           # 0–1
+            "downbeatConfidence": tempo.downbeat_confidence,
+
+            # --- TempoMap (only non-empty when tempoMode != "fixed") ---
+            "tempoMap": [
+                {
+                    "startBeat": r.start_beat,
+                    "startTime": r.start_time,
+                    "bpm": r.bpm,
+                    "timeSignature": r.time_signature,
+                }
+                for r in tempo.tempo_map
+            ],
+
+            # --- beat grid lock (user must confirm before click follows grid) ---
+            "beatGridLocked": tempo.beat_grid_locked,
+            "grid": propose_grid(tempo.bpm, tempo.beat_offset, bpb, tempo.beats),
         }
+
+        # --- Generate user warnings based on the richer data we now have ---
         if tempo.bpm is None:
-            warnings.append("BPM could not be detected — set it manually for click")
-        elif tempo.confidence < 0.5:
-            warnings.append(f"BPM {tempo.bpm} detected with low confidence — please verify")
+            warnings.append(
+                "BPM could not be detected — set the tempo manually so the click can follow the song"
+            )
+        elif tempo.tempo_mode == "changing":
+            warnings.append(
+                f"Intentional tempo change detected — this recording has {len(tempo.tempo_map)} tempo "
+                f"regions. Verify the downbeat and tempo map in the editor."
+            )
+        elif tempo.tempo_mode == "drifting":
+            warnings.append(
+                f"Live tempo drift detected (stability {tempo.stability:.0%}) — "
+                f"this recording may be from a live performance without a click track. "
+                f"Verify the downbeat: play the song and use Set Downbeat at the first beat."
+            )
+        elif tempo.confidence < 0.35:
+            warnings.append(
+                f"BPM {tempo.bpm:g} is uncertain — listen and correct the tempo if the click does not match"
+            )
+
+        # Warn if we had to skip over a long pre-music section
+        if tempo.musical_start > 2.0:
+            warnings.append(
+                f"Music starts at {tempo.musical_start:.1f}s — Beat 1 is the first bar line there. "
+                f"The audio before that may be silence or a spoken introduction. Please verify."
+            )
+
         (song / "analysis").mkdir(parents=True, exist_ok=True)
-        (song / "analysis" / "analysis.json").write_text(json.dumps({**analysis, "beats": tempo.beats}))
+        # Write full analysis including explicit beat timestamps for the click engine
+        (song / "analysis" / "analysis.json").write_text(
+            dumps({**analysis, "beats": tempo.beats})
+        )
         timings["analyze"] = time.time() - t
     result["analysis"] = analysis
     p.done("analyze")
@@ -156,7 +223,7 @@ def run(req: PrepareRequest) -> dict:
     if result["rendered"].get("backing"):
         wf_src, _ = io.read(str(song / result["rendered"]["backing"]))
     (song / "analysis").mkdir(parents=True, exist_ok=True)
-    (song / "analysis" / "waveform.json").write_text(json.dumps(peaks(wf_src if wf_src is not None else mix, sr)))
+    (song / "analysis" / "waveform.json").write_text(dumps(peaks(wf_src if wf_src is not None else mix, sr)))
     p.done("waveform")
 
     p.stage("qc", 0, "Quality control")

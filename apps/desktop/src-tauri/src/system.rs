@@ -176,6 +176,20 @@ pub fn readiness(ctx: &Ctx) -> Readiness {
         if engines.is_empty() { format!("{model} not downloaded") } else { format!("{model} · {}", engines.join(", ")) },
         Some("Download a model in AI Models below."),
     ));
+    if settings.separation_profile == "worship" {
+        let mdx = ctx.resources.model_installed(&paths, "inst-hq-3");
+        checks.push(check(
+            "mdx",
+            "Worship vocal model",
+            if mdx { "ok" } else { "missing" },
+            if mdx {
+                "UVR-MDX-NET Inst HQ 3".to_string()
+            } else {
+                "Not downloaded — live vocal removal will use Demucs only".to_string()
+            },
+            Some("Download UVR-MDX-NET Inst HQ 3 below."),
+        ));
+    }
 
     let ollama = if settings.ollama_enabled { ollama_models(&settings.ollama_url) } else { Err("disabled".into()) };
     let ollama_list = ollama.clone().unwrap_or_default();

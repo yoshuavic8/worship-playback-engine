@@ -9,15 +9,13 @@ import numpy as np
 
 
 def _bar_times(duration: float, bpm: float | None, offset: float, bpb: int) -> np.ndarray:
+    """Bar lines starting at Beat 1. Silence before Beat 1 is not bar 1."""
     if bpm and bpm > 0:
         bar = bpb * 60.0 / bpm
-        start = offset - bar * np.floor(offset / bar)
-        t = np.arange(start, duration, bar)
-        if t[0] > 0.25 * bar:
-            t = np.concatenate([[0.0], t])
-        else:
-            t[0] = 0.0
-        return t
+        start = max(0.0, float(offset))
+        if start >= duration:
+            return np.array([start])
+        return np.arange(start, duration, bar)
     return np.arange(0.0, duration, 2.0)
 
 
@@ -150,7 +148,8 @@ def detect_sections(y: np.ndarray, sr: int, bpm: float | None, beat_offset: floa
     duration = len(y) / sr
     bars = _bar_times(duration, bpm, beat_offset, bpb)
     if len(bars) < 6:
-        return [{"label": "Song", "kind": "other", "start": 0.0}]
+        start = float(bars[0]) if len(bars) else 0.0
+        return [{"label": "Song", "kind": "other", "start": round(start, 3)}]
     hop = 2048
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop)
     mfcc = librosa.feature.mfcc(y=y, sr=sr, hop_length=hop, n_mfcc=13)
@@ -166,8 +165,8 @@ def detect_sections(y: np.ndarray, sr: int, bpm: float | None, beat_offset: floa
     chroma_b, mfcc_b = np.nan_to_num(np.asarray(chroma_b)), np.nan_to_num(np.asarray(mfcc_b))
     loud = np.log10(np.asarray(energy) + 1e-5)[:, None]
 
-    # Phrase level (4 bars): averaging over a whole chord cycle makes the progression, not the
-    # individual chord, the feature. Energy is weighted ×3 — arrangement dynamics define sections.
+    # Phrases of 4 bars counted from Beat 1 (bars[0]), not from t = 0.
+    # A lead-in must not shift every boundary by a bar.
     nb = len(bars)
     phrase_starts = list(range(0, nb, PHRASE_BARS))
     if nb - phrase_starts[-1] < 2 and len(phrase_starts) > 1:
@@ -186,6 +185,6 @@ def detect_sections(y: np.ndarray, sr: int, bpm: float | None, beat_offset: floa
     clusters = cluster_segments(_standardize(seg_feats) if len(seg_feats) > 2 else seg_feats)
     named = name_segments(clusters, seg_energy, [e - s for s, e in zip(starts, ends)])
     return [
-        {"label": label, "kind": kind, "start": round(float(bars[s]) if i else 0.0, 3)}
-        for i, ((label, kind), s) in enumerate(zip(named, starts))
+        {"label": label, "kind": kind, "start": round(float(bars[s]), 3)}
+        for (label, kind), s in zip(named, starts)
     ]

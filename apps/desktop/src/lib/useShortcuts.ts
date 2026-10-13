@@ -13,7 +13,9 @@ export function useShortcuts() {
       if (document.querySelector("[data-capturing-shortcut]")) return;
       const action = matchShortcut(e, map);
       if (action === "panic") {
-        // Escape also closes dialogs: only panic when no dialog is open, or with Shift+Escape.
+        const onLive = useApp.getState().route.page === "live";
+        // Esc = PANIC only on Live. Elsewhere use Shift+Esc (or the PANIC button).
+        if (map.panic === "Escape" && !onLive && !e.shiftKey) return;
         if (map.panic === "Escape" && document.querySelector("[role=dialog]") && !e.shiftKey) return;
         e.preventDefault();
         panicStop();

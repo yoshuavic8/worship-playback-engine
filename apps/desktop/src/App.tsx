@@ -45,7 +45,7 @@ export default function App() {
       <div className="app-bg flex h-full">
         {!live && <Sidebar />}
         <div className="flex min-w-0 flex-1 flex-col">
-          <main key={`${route.page}:${route.id ?? ""}`} className="min-h-0 flex-1 overflow-y-auto">
+          <main key={`${route.page}:${route.id ?? ""}`} className={`min-h-0 flex-1 ${route.page === "song" ? "overflow-hidden" : "overflow-y-auto"}`}>
             <PageView />
           </main>
           {!live && <MiniTransport />}

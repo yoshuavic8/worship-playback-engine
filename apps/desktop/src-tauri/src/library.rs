@@ -122,6 +122,7 @@ pub fn import_file(db: &Db, songs_dir: &Path, src: &Path, defaults: &PrepSetting
         notes: String::new(),
         last_error: None,
         analysis: None,
+        grid: None,
         created_at: now.clone(),
         updated_at: now,
         prepared_at: None,

@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  AlertTriangle, ArrowLeft, Drum, Headphones, ListMusic, Loader2, Maximize2, Mic, Minimize2, Pause, Play, Radio, Repeat,
+  AlertTriangle, ArrowLeft, ListMusic, Loader2, Maximize2, Mic, Minimize2, Pause, Play, Radio, Repeat,
   SkipBack, SkipForward, Square, Volume1,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -8,15 +8,15 @@ import { toast } from "sonner";
 import { Metronome } from "@/components/icons";
 import { KeyBpm } from "@/components/SongBits";
 import { PanicButton, StateBadge, planLen, planPos, segOffset } from "@/components/Transport";
-import { Badge, Button, Meter, StatusDot, Tip } from "@/components/ui";
-import { cn, fmtTime } from "@/lib/format";
+import { Badge, Button, Meter, Slider, StatusDot, Tip } from "@/components/ui";
+import { cn, fmtDate, fmtDb, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
 import { sectionColor } from "@/lib/sections";
 import { DEFAULT_SHORTCUTS, keyLabel } from "@/lib/shortcuts";
 import {
   fadeOut, gotoSong, isRolling, jumpTo, stepSong, stop, toggleClick, toggleCue, toggleLoop, togglePlay,
 } from "@/lib/transport";
-import type { LiveInfo } from "@/lib/types";
+import type { LiveInfo, TrackInfo, TrackRole } from "@/lib/types";
 import { useApp, usePlayback } from "@/store/app";
 
 export function Live() {
@@ -91,8 +91,22 @@ function LiveView({ live }: { live: LiveInfo }) {
   const segRemaining = seg ? Math.max(0, seg.end - pos) : 0;
   const beat = loaded?.bpm ? 60 / loaded.bpm : 0.5;
   const countIn = status?.state === "COUNT_IN" ? Math.max(1, Math.ceil((status.countInRemaining ?? 0) / beat)) : null;
-  const optionalDrums = loaded?.tracks.find((t) => t.role === "drums");
-  const guide = loaded?.tracks.find((t) => t.role === "vocals");
+  const notes = song?.notes.trim() ?? "";
+  const countInBars = song?.countInBars ?? loaded?.countInBars ?? 0;
+
+  const endLive = async () => {
+    await ipc.stop().catch(() => {});
+    await ipc.liveClose().catch(() => {});
+    useApp.getState().setLive(null);
+    navigate("setlist", live.setlist.id);
+  };
+
+  const confirmEndLive = () => {
+    const st = usePlayback.getState().status?.state;
+    const audible = isRolling(st) || st === "PAUSED";
+    if (audible && !window.confirm("Playback is still active. End live and stop the music?")) return;
+    void endLive();
+  };
 
   const toggleFull = async () => {
     const w = getCurrentWindow();
@@ -101,17 +115,18 @@ function LiveView({ live }: { live: LiveInfo }) {
     setFull(f);
   };
 
-  const fallback = loaded && loaded.source !== "backing";
+  const fallback = loaded?.source === "original" || loaded?.source === "backup";
 
   return (
     <div className="flex h-full flex-col bg-[#08090a]">
       {/* top bar */}
       <div className="drag flex h-14 shrink-0 items-center gap-4 border-b border-line/70 pr-4 pl-20">
-        <Button size="sm" variant="ghost" className="no-drag" icon={<ArrowLeft className="size-4" />} onClick={() => navigate("setlist", live.setlist.id)}>Setlist</Button>
+        <Button size="sm" variant="ghost" className="no-drag" icon={<ArrowLeft className="size-4" />} onClick={confirmEndLive}>Setlist</Button>
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1.5 rounded-md bg-live px-2 py-0.5 text-[0.7rem] font-black tracking-[0.14em] text-white"><Radio className="size-3" />LIVE</span>
           <span className="truncate font-semibold">{live.setlist.name}</span>
         </div>
+        <Button size="sm" variant="danger" className="no-drag" icon={<Square className="size-3.5" fill="currentColor" />} onClick={confirmEndLive}>End live</Button>
         <div className="flex-1" />
         <div className="no-drag flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-xs">
           <StatusDot tone={audio?.running ? "ok" : "err"} />
@@ -161,26 +176,34 @@ function LiveView({ live }: { live: LiveInfo }) {
         </aside>
 
         {/* stage */}
-        <main className="flex min-w-0 flex-1 flex-col px-10 py-8">
-          <div className="flex items-start justify-between gap-6">
-            <div className="min-w-0">
-              <div className="flex items-center gap-3">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-10 py-5">
+          <div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
                 <StateBadge state={status?.state} fading={status?.fading} />
                 <span className="text-xs text-muted">Song {index + 1} of {live.songs.length}</span>
+                <span className="rounded-md bg-accent/15 px-2 py-0.5 text-xs font-bold text-accent">
+                  {countInBars > 0 ? `Count-in ${countInBars} ${countInBars === 1 ? "bar" : "bars"}` : "No count-in"}
+                </span>
                 {fallback && <Badge tone="warn"><AlertTriangle className="size-3" />Playing {loaded?.source}</Badge>}
               </div>
-              <h1 className="mt-1 truncate text-[2.6rem] leading-tight font-bold tracking-tight">{song?.title}</h1>
-              <div className="text-base text-muted">{song?.artist}</div>
-            </div>
-            <div className="flex shrink-0 gap-3">
+              <div className="flex shrink-0 gap-2">
               <BigStat label="Key" value={loaded?.key ?? song?.key ?? "—"} />
-              <BigStat label="BPM" value={loaded?.bpm ? String(Math.round(loaded.bpm * 10) / 10) : "—"} />
+              <BigStat label="BPM" value={loaded?.bpm ? String(Math.round(loaded.bpm * 1000) / 1000) : "—"} />
               <BigStat label="Time" value={loaded?.timeSignature ?? "4/4"} />
+              </div>
             </div>
+            <h1 className="mt-2 text-[2.4rem] leading-tight font-bold tracking-tight">{song?.title}</h1>
+            <div className="text-base text-muted">{song?.artist}</div>
+            {notes && (
+              <div className="mt-3 max-h-24 overflow-y-auto rounded-xl border border-accent/25 bg-accent/[0.06] px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line text-fg">
+                {notes}
+              </div>
+            )}
           </div>
 
           {/* now / next */}
-          <div className="mt-8 grid grid-cols-[1fr_auto_1fr] items-stretch gap-4">
+          <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-stretch gap-4">
             <div className="rounded-2xl border border-line bg-panel/60 px-6 py-5">
               <div className="label">Now</div>
               <div className="mt-1 truncate text-[2rem] font-bold" style={{ color: seg ? sectionColor(seg.kind) : undefined }}>{seg?.label ?? "—"}</div>
@@ -213,7 +236,7 @@ function LiveView({ live }: { live: LiveInfo }) {
           </div>
 
           {/* section timeline */}
-          <div className="mt-8">
+          <div className="mt-5">
             <div className="mb-2 flex items-center justify-between text-xs text-muted">
               <span>Click a section to jump there at the end of the current one · <span className="text-fg-2">Shift-click</span> jumps now</span>
               {queuedIdx != null && <button className="text-mon hover:underline" onClick={() => ipc.cancelJump()}>Cancel jump</button>}
@@ -243,10 +266,10 @@ function LiveView({ live }: { live: LiveInfo }) {
             </div>
           </div>
 
-          <div className="flex-1" />
+          <div className="min-h-4 flex-1" />
 
           {/* transport */}
-          <div className="mt-8 flex items-center justify-center gap-4">
+          <div className="mt-4 flex items-center justify-center gap-4">
             <LiveBtn label={`Previous song (${keyLabel(shortcuts.prevSong)})`} onClick={() => stepSong(-1)} disabled={index === 0 || rolling}><SkipBack className="size-6" fill="currentColor" /></LiveBtn>
             <LiveBtn label={`Stop (${keyLabel(shortcuts.stop)})`} onClick={stop}><Square className="size-6" fill="currentColor" /></LiveBtn>
             <button onClick={togglePlay} aria-label="Play / Pause"
@@ -265,7 +288,7 @@ function LiveView({ live }: { live: LiveInfo }) {
         </main>
 
         {/* monitor panel */}
-        <aside className="flex w-[17rem] shrink-0 flex-col gap-4 border-l border-line/70 px-4 py-5">
+        <aside className="flex w-[19rem] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line/70 px-4 py-5">
           <div>
             <div className="label mb-2">Monitor (in-ears)</div>
             <div className="space-y-2">
@@ -273,22 +296,16 @@ function LiveView({ live }: { live: LiveInfo }) {
                 hint={loaded?.clickAvailable ? undefined : "No BPM set"} />
               <MonToggle icon={<Mic className="size-5" />} label="Voice cues" on={!!loaded?.cueEnabled} disabled={!loaded?.cueAvailable} onClick={toggleCue}
                 hint={loaded?.cueAvailable ? undefined : "No sections"} />
-              {guide && <MonToggle icon={<Headphones className="size-5" />} label="Guide vocal" on={!guide.muted} onClick={() => setTrack(guide.role, guide.gainDb, !guide.muted)} />}
             </div>
           </div>
-          {optionalDrums && (
-            <div>
-              <div className="label mb-2">Backing</div>
-              <MonToggle icon={<Drum className="size-5" />} label="Drums in track" on={!optionalDrums.muted} onClick={() => setTrack("drums", optionalDrums.gainDb, !optionalDrums.muted)} tone="foh" />
-            </div>
-          )}
           <div>
             <div className="label mb-2">Section</div>
             <MonToggle icon={<Repeat className="size-5" />} label="Loop section" on={!!status?.looping} onClick={toggleLoop} tone="foh" />
           </div>
-          <div className="flex-1" />
+          {!!loaded?.tracks.length && <LiveMixer tracks={loaded.tracks} />}
+          <div className="min-h-2 flex-1" />
           <div className="rounded-2xl border border-line bg-panel/60 p-4">
-            <div className="flex h-40 justify-center gap-6">
+            <div className="flex h-28 justify-center gap-6">
               <MeterPair label="FOH" l={status?.meters[0] ?? 0} r={status?.meters[1] ?? 0} color="text-foh" />
               <MeterPair label="MON" l={status?.meters[2] ?? 0} r={status?.meters[3] ?? 0} color="text-mon" />
             </div>
@@ -299,10 +316,52 @@ function LiveView({ live }: { live: LiveInfo }) {
   );
 }
 
-function setTrack(role: Parameters<typeof ipc.setTrack>[0], gainDb: number, muted: boolean) {
+const TRACK_ORDER: TrackRole[] = ["other", "bass", "drums", "backing", "backup", "original", "vocals"];
+const TRACK_NAMES: Record<TrackRole, string> = {
+  other: "Keys / guitars",
+  bass: "Bass",
+  drums: "Drums",
+  backing: "Backing",
+  backup: "Backup",
+  original: "Original",
+  vocals: "Guide vocal",
+};
+
+function setTrack(role: TrackRole, gainDb: number, muted: boolean) {
   const l = useApp.getState().loaded;
-  if (l) useApp.getState().setLoaded({ ...l, tracks: l.tracks.map((t) => (t.role === role ? { ...t, muted } : t)) });
+  if (l) useApp.getState().setLoaded({ ...l, tracks: l.tracks.map((t) => (t.role === role ? { ...t, gainDb, muted } : t)) });
   ipc.setTrack(role, gainDb, muted);
+}
+
+function LiveMixer({ tracks }: { tracks: TrackInfo[] }) {
+  const sorted = [...tracks].sort((a, b) => TRACK_ORDER.indexOf(a.role) - TRACK_ORDER.indexOf(b.role));
+  return (
+    <div>
+      <div className="label mb-2">Tracks</div>
+      <div className="space-y-2">
+        {sorted.map((t) => (
+          <div key={t.role} className="rounded-xl border border-line bg-panel/50 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className={cn("truncate text-sm font-semibold", t.muted && "text-muted")}>{TRACK_NAMES[t.role]}</div>
+              <div className="flex shrink-0 gap-1.5 text-[0.6rem] font-bold tracking-wide">
+                {t.toFoh && <span className="text-foh">FOH</span>}
+                {t.toMon && <span className="text-mon">MON</span>}
+              </div>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <Slider value={t.gainDb} min={-24} max={6} step={0.5} tone={t.toFoh ? "accent" : "mon"} label={`${TRACK_NAMES[t.role]} level`}
+                onChange={(v) => setTrack(t.role, v, t.muted)} />
+              <span className="tnum w-14 shrink-0 text-right text-[0.7rem] text-muted">{fmtDb(t.gainDb)}</span>
+              <button onClick={() => setTrack(t.role, t.gainDb, !t.muted)}
+                className={cn("h-7 w-14 shrink-0 rounded-md border text-[0.62rem] font-black tracking-wide", t.muted ? "border-err/50 bg-err/15 text-err" : "border-line text-muted hover:text-fg")}>
+                {t.muted ? "MUTED" : "Mute"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function describe(t?: { kind: string; channel?: number; left?: number; right?: number }) {
@@ -380,7 +439,7 @@ function ChooseSetlist() {
               <Radio className="size-5 text-live" />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold">{s.name}</div>
-                <div className="text-xs text-muted">{s.date ?? "No date"} · {s.items.length} songs · {s.items.filter((i) => { const x = songs.find((y) => y.id === i.songId); return x?.status === "ready" || x?.status === "warning"; }).length} ready</div>
+                <div className="text-xs text-muted">{s.date ? fmtDate(s.date) : "No date"} · {s.items.length} songs · {s.items.filter((i) => { const x = songs.find((y) => y.id === i.songId); return x?.status === "ready" || x?.status === "warning"; }).length} ready</div>
               </div>
               <span className="text-sm text-accent">Go live →</span>
             </button>

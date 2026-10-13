@@ -73,6 +73,15 @@ struct WorkerAnalysis {
     duration: Option<f64>,
     sections: Vec<WorkerSection>,
     bpm_alternatives: Vec<f64>,
+    // New timeline & stability fields
+    audio_start: Option<f64>,
+    musical_start: Option<f64>,
+    tempo_mode: Option<String>,
+    stability: Option<f64>,
+    downbeat_confidence: Option<f64>,
+    tempo_map: Option<serde_json::Value>,
+    beat_grid_locked: Option<bool>,
+    grid: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -281,6 +290,8 @@ fn run_job(ctx: &Ctx, job_id: &str) {
             "device": settings.separation_device,
             "modelsDir": paths.demucs_models(),
             "mlxModelsDir": paths.models().join("demucs-mlx"),
+            "mdxModelsDir": paths.models().join("mdx"),
+            "profile": settings.separation_profile,
         },
         "analysis": {
             "enabled": opts.analyze,
@@ -425,8 +436,9 @@ fn apply_result(ctx: &Ctx, song_id: &str, opts: &PrepOptions, r: &WorkerResult) 
     let mut analysis = song.analysis.clone().unwrap_or_else(|| serde_json::json!({}));
     if let Some(a) = &r.analysis {
         let ow = opts.overwrite_manual;
-        if a.bpm.is_some() && (ow || song.bpm.is_none()) {
-            song.bpm = a.bpm.map(|b| (b * 10.0).round() / 10.0);
+        let keep_user_grid = song.grid.as_ref().map(|g| g.source == "user").unwrap_or(false) && !ow;
+        if a.bpm.is_some() && (ow || song.bpm.is_none()) && !keep_user_grid {
+            song.bpm = a.bpm.map(|b| (b * 1000.0).round() / 1000.0);
             song.beat_offset = a.beat_offset.unwrap_or(0.0);
         }
         if a.key.is_some() && (ow || song.key.is_none()) {
@@ -454,6 +466,26 @@ fn apply_result(ctx: &Ctx, song_id: &str, opts: &PrepOptions, r: &WorkerResult) 
             "bpm": a.bpm, "key": a.key, "beatOffset": a.beat_offset, "sectionCount": a.sections.len(),
             "bpmAlternatives": a.bpm_alternatives,
         });
+        // Forward new timeline / stability fields into the analysis blob.
+        // These are read by the player (build_beat_grid) and the frontend.
+        if let Some(v) = a.audio_start { analysis["audioStart"] = serde_json::json!(v); }
+        if let Some(v) = a.musical_start { analysis["musicalStart"] = serde_json::json!(v); }
+        if let Some(v) = &a.tempo_mode { analysis["tempoMode"] = serde_json::json!(v); }
+        if let Some(v) = a.stability { analysis["stability"] = serde_json::json!(v); }
+        if let Some(v) = a.downbeat_confidence { analysis["downbeatConfidence"] = serde_json::json!(v); }
+        if let Some(v) = &a.tempo_map { analysis["tempoMap"] = v.clone(); }
+        // Preserve beatGridLocked if previously set by user; only reset it on overwrite.
+        let already_locked = analysis.get("beatGridLocked").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !already_locked {
+            analysis["beatGridLocked"] = serde_json::json!(a.beat_grid_locked.unwrap_or(false));
+        }
+        if !keep_user_grid {
+            if let Some(raw) = &a.grid {
+                if let Ok(parsed) = serde_json::from_value(raw.clone()) {
+                    song.grid = crate::audio::tempo_map::sanitize_grid(parsed, song.beats_per_bar(), song.duration.max(a.duration.unwrap_or(song.duration)));
+                }
+            }
+        }
     }
     if let Some(sep) = &r.separator {
         analysis["separator"] = sep.clone();
