@@ -24,4 +24,12 @@ models/
 .tmp/
 *.log
 .env
+.env.*
+cursor.env
+*.pem
+*.p12
+*.key
 dist-artifacts/
+apps/desktop/src-tauri/binaries/*
+!apps/desktop/src-tauri/binaries/.gitkeep
+apps/desktop/src-tauri/binaries/.cache/

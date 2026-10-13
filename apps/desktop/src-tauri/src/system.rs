@@ -1,10 +1,10 @@
 //! System readiness / dependency detection for Diagnostics.
 
+use crate::compat::{self, CompatInfo, CompatProfile};
 use crate::core::Ctx;
 use crate::paths::find_tool;
 use serde::Serialize;
 use std::process::Command;
-use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +25,7 @@ pub struct Readiness {
     pub preparation: String,
     pub ai: String,
     pub ollama_models: Vec<String>,
+    pub compat: CompatInfo,
     pub app_version: String,
     pub data_dir: String,
     pub library_dir: String,
@@ -46,38 +47,47 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 pub fn ollama_models(url: &str) -> Result<Vec<String>, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(1500))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let r = client.get(format!("{}/api/tags", url.trim_end_matches('/'))).send().map_err(|e| e.to_string())?;
-    let j: serde_json::Value = r.json().map_err(|e| e.to_string())?;
-    Ok(j["models"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|m| m["name"].as_str().map(String::from)).collect())
-        .unwrap_or_default())
+    compat::probe_ollama(url).map(|p| p.models)
 }
 
 pub fn readiness(ctx: &Ctx) -> Readiness {
     let paths = ctx.paths.read().clone();
     let settings = ctx.settings.read().clone();
+    let compat = compat::detect();
     let mut checks = vec![];
 
-    let arm = std::env::consts::ARCH == "aarch64";
-    let chip = run("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]).unwrap_or_default();
     checks.push(check(
-        "silicon",
-        "Apple Silicon",
-        if arm { "ok" } else { "warning" },
-        if arm { format!("{chip} detected") } else { "Intel Mac — separation will be slow".into() },
+        "profile",
+        "Compatibility profile",
+        if compat.profile == CompatProfile::Full { "ok" } else { "warning" },
+        format!("{} — {}", if compat.profile == CompatProfile::Full { "Full" } else { "Lite" }, compat.reason),
+        compat.prep_eta_warning.as_deref(),
+    ));
+    checks.push(check(
+        "arch",
+        "Architecture",
+        "ok",
+        compat.hardware.arch_label.clone(),
         None,
     ));
-    let mem = run("/usr/sbin/sysctl", &["-n", "hw.memsize"])
-        .and_then(|m| m.parse::<u64>().ok())
-        .map(|b| format!("{} GB unified memory", b / 1_073_741_824))
-        .unwrap_or_default();
-    let os = run("/usr/bin/sw_vers", &["-productVersion"]).unwrap_or_default();
-    checks.push(check("macos", "macOS", "ok", format!("macOS {os} · {mem}"), None));
+    checks.push(check(
+        "macos",
+        "macOS",
+        "ok",
+        format!("macOS {} · {} GB RAM", compat.hardware.macos_version, compat.hardware.ram_gb),
+        None,
+    ));
+    checks.push(check(
+        "separation",
+        "Separation backend",
+        "ok",
+        compat.separation_backend.clone(),
+        if compat.mlx_available {
+            None
+        } else {
+            Some("Same Demucs models — Intel/older macOS uses PyTorch CPU (slower, not lower quality).")
+        },
+    ));
 
     let audio_ok = ctx.engine.running();
     checks.push(match &audio_ok {
@@ -105,13 +115,25 @@ pub fn readiness(ctx: &Ctx) -> Readiness {
                 .unwrap_or_default();
             check("ffmpeg", "FFmpeg", "ok", v, None)
         }
-        None => check("ffmpeg", "FFmpeg", "missing", "Not found", Some("brew install ffmpeg")),
+        None => check(
+            "ffmpeg",
+            "FFmpeg",
+            "missing",
+            "Bundled ffmpeg not found",
+            Some("Run Setup or Repair setup from Diagnostics."),
+        ),
     });
 
     let uv = find_tool("uv");
     checks.push(match &uv {
         Some(p) => check("uv", "uv (Python manager)", "ok", run(&p.to_string_lossy(), &["--version"]).unwrap_or_default(), None),
-        None => check("uv", "uv (Python manager)", "missing", "Not found", Some("brew install uv")),
+        None => check(
+            "uv",
+            "uv (Python manager)",
+            "missing",
+            "Bundled uv not found",
+            Some("Reinstall the app or run Repair setup."),
+        ),
     });
 
     let py = paths.python_bin();
@@ -141,7 +163,7 @@ pub fn readiness(ctx: &Ctx) -> Readiness {
             "Python environment",
             "missing",
             if env_ok { "Environment is broken".into() } else { "Not installed".to_string() },
-            Some("Click Install environment (≈1 GB download, one time)."),
+            Some("Open Setup or Diagnostics → Repair setup."),
         ),
     });
     let has = |k: &str| probe.as_ref().map(|p| p[k] == true).unwrap_or(false);
@@ -191,16 +213,37 @@ pub fn readiness(ctx: &Ctx) -> Readiness {
         ));
     }
 
-    let ollama = if settings.ollama_enabled { ollama_models(&settings.ollama_url) } else { Err("disabled".into()) };
-    let ollama_list = ollama.clone().unwrap_or_default();
-    checks.push(match &ollama {
-        Ok(m) if !m.is_empty() => {
-            let sel = settings.ollama_model.clone().filter(|s| m.contains(s)).unwrap_or_else(|| m[0].clone());
-            check("ollama", "Ollama (optional)", "ok", format!("{} models · using {sel}", m.len()), None)
+    let ollama_probe = compat::probe_ollama_if_enabled(settings.ollama_enabled, &settings.ollama_url);
+    let ollama_list = ollama_probe.as_ref().map(|p| p.models.clone()).unwrap_or_default();
+    let ollama_hint = compat::ollama_pull_hint(&compat, &ollama_list);
+    checks.push(match &ollama_probe {
+        Ok(p) if !p.models.is_empty() => {
+            let sel = compat::pick_ollama_model(settings.ollama_model.as_deref(), &p.models, &compat)
+                .unwrap_or_else(|| p.models[0].clone());
+            let ver = p.version.as_deref().unwrap_or("?");
+            check(
+                "ollama",
+                "Ollama (optional)",
+                "ok",
+                format!("v{ver} · {} models · using {sel}", p.models.len()),
+                None,
+            )
         }
-        Ok(_) => check("ollama", "Ollama (optional)", "optional", "Running, but no models pulled", Some("ollama pull qwen2.5:7b")),
+        Ok(_) => check(
+            "ollama",
+            "Ollama (optional)",
+            "optional",
+            "Running, but no models pulled",
+            ollama_hint.as_deref(),
+        ),
         Err(e) if e == "disabled" => check("ollama", "Ollama (optional)", "optional", "Disabled in Settings", None),
-        Err(_) => check("ollama", "Ollama (optional)", "optional", "Unavailable — the app works fine without it", None),
+        Err(_) => check(
+            "ollama",
+            "Ollama (optional)",
+            "optional",
+            "Not installed — rules engine & manual controls work without it",
+            ollama_hint.as_deref(),
+        ),
     });
 
     let playback = if audio_ok.is_some() { "READY" } else { "NOT READY" };
@@ -211,7 +254,13 @@ pub fn readiness(ctx: &Ctx) -> Readiness {
     } else {
         "SETUP NEEDED"
     };
-    let ai = if ollama.map(|m| !m.is_empty()).unwrap_or(false) { "READY" } else { "OPTIONAL" };
+    let ai = if ollama_list.is_empty() {
+        "OPTIONAL"
+    } else if settings.ollama_enabled {
+        "READY"
+    } else {
+        "OPTIONAL"
+    };
 
     Readiness {
         checks,
@@ -219,6 +268,7 @@ pub fn readiness(ctx: &Ctx) -> Readiness {
         preparation: preparation.into(),
         ai: ai.into(),
         ollama_models: ollama_list,
+        compat,
         app_version: env!("CARGO_PKG_VERSION").into(),
         data_dir: paths.root.to_string_lossy().into(),
         library_dir: paths.songs().to_string_lossy().into(),

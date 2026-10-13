@@ -6,12 +6,15 @@
 pub mod ai;
 pub mod audio;
 pub mod commands;
+pub mod compat;
 pub mod core;
 pub mod cue;
 pub mod db;
+pub mod keys;
 pub mod library;
 pub mod logs;
 pub mod models;
+pub mod ollama_install;
 pub mod paths;
 pub mod player;
 pub mod preflight;
@@ -19,6 +22,7 @@ pub mod prep;
 pub mod presets;
 pub mod resources;
 pub mod settings;
+pub mod setup;
 pub mod system;
 
 use tauri::Manager;
@@ -89,6 +93,13 @@ pub fn run() {
             commands::live_close,
             commands::live_info,
             commands::run_preflight,
+            commands::setup_status,
+            commands::run_setup,
+            commands::repair_setup,
+            commands::setup_pause,
+            commands::setup_resume,
+            commands::ollama_install_info,
+            commands::ollama_pull_model,
             commands::system_readiness,
             commands::list_resources,
             commands::download_resource,
@@ -97,6 +108,8 @@ pub fn run() {
             commands::install_python_env,
             commands::get_logs,
             commands::ai_status,
+            commands::ai_cancel_request,
+            commands::ai_warmup,
             commands::ai_song_command,
             commands::ai_setlist_command,
             commands::export_library,

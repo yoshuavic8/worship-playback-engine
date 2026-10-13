@@ -91,6 +91,8 @@ export interface Song {
   artist: string;
   bpm: number | null;
   key: string | null;
+  keyPitchClass?: number | null;
+  keyMode?: "major" | "minor" | string | null;
   timeSignature: string;
   beatOffset: number;
   duration: number;
@@ -189,6 +191,24 @@ export interface AppSettings {
   uiLocale: "en" | "id";
 }
 
+export interface SetupStep {
+  id: string;
+  title: string;
+  detail: string;
+  sizeBytes: number;
+  ready: boolean;
+}
+
+export interface SetupStatus {
+  complete: boolean;
+  phase: "idle" | "engine" | "models" | "done" | "error";
+  message: string;
+  progress: number;
+  etaSecs: number | null;
+  paused: boolean;
+  steps: SetupStep[];
+}
+
 export interface Bootstrap {
   settings: AppSettings;
   audio: AudioSettings;
@@ -196,6 +216,7 @@ export interface Bootstrap {
   version: string;
   dataDir: string;
   clickSounds: [string, string][];
+  setup: SetupStatus;
 }
 
 export interface DeviceInfo {
@@ -354,12 +375,30 @@ export interface Check {
   hint: string | null;
 }
 
+export interface CompatInfo {
+  profile: "full" | "lite";
+  reason: string;
+  separationBackend: string;
+  prepConcurrency: number;
+  prepEtaWarning: string | null;
+  mlxAvailable: boolean;
+  hardware: {
+    archLabel: string;
+    macosVersion: string;
+    ramGb: number;
+    rosetta: boolean;
+    appleSilicon: boolean;
+  };
+  ollamaVersion: string | null;
+}
+
 export interface Readiness {
   checks: Check[];
   playback: string;
   preparation: string;
   ai: string;
   ollamaModels: string[];
+  compat: CompatInfo;
   appVersion: string;
   dataDir: string;
   libraryDir: string;
@@ -409,6 +448,8 @@ export interface AiStatus {
   model: string | null;
   available: boolean;
   models: string[];
+  rulesOnly: boolean;
+  compatProfile: "full" | "lite";
 }
 
 /** Validated timeline edits from the local assistant. Missing fields stay as they are. */

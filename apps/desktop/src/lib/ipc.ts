@@ -75,6 +75,13 @@ export const ipc = {
 
   // diagnostics & resources
   readiness: () => call<T.Readiness>("system_readiness"),
+  setupStatus: () => call<T.SetupStatus>("setup_status"),
+  runSetup: () => call<void>("run_setup"),
+  repairSetup: () => call<void>("repair_setup"),
+  setupPause: () => call<void>("setup_pause"),
+  setupResume: () => call<void>("setup_resume"),
+  ollamaInstallInfo: () => call<{ downloadPage: string; zipUrl: string; recommendedVersion: string; notes: string }>("ollama_install_info"),
+  ollamaPullModel: (model: string) => call<{ status: string; completed: number; total: number; done: boolean }>("ollama_pull_model", { model }),
   listResources: () => call<T.ResourceStatus[]>("list_resources"),
   downloadResource: (id: string) => call<void>("download_resource", { id }),
   cancelDownload: (id: string) => call<void>("cancel_download", { id }),
@@ -84,6 +91,8 @@ export const ipc = {
 
   // AI (local Ollama only — optional)
   aiStatus: () => call<T.AiStatus>("ai_status"),
+  aiCancel: () => call<void>("ai_cancel_request"),
+  aiWarmup: () => call<void>("ai_warmup"),
   aiSong: (songId: string, text: string) => call<T.AiProposal>("ai_song_command", { songId, text }),
   aiSetlist: (text: string) => call<T.AiProposal>("ai_setlist_command", { text }),
 

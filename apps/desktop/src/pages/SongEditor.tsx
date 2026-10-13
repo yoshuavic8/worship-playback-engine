@@ -10,6 +10,7 @@ import { acceptSongReview, loadSong, prepareSongs } from "@/lib/actions";
 import { clampTimelineZoom } from "@/lib/editorZoom";
 import { cn, fmtDb, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
+import { modeFromKey, pitchClassFromKey } from "@/lib/keyDisplay";
 import { beatsPerBar } from "@/lib/meter";
 import { visibleReviewWarnings } from "@/lib/reviewWarnings";
 import { nextLabel, resolveSections } from "@/lib/sections";
@@ -749,7 +750,11 @@ export function SongEditor({ id }: { id: string }) {
           onDelete: removeSelected,
           onMoveBeat: commitBeat,
           onBpm: commitBpm,
-          onKey: (key) => edit({ key }),
+          onKey: (key) => edit({
+            key,
+            keyPitchClass: pitchClassFromKey(key),
+            keyMode: modeFromKey(key),
+          }),
           onTimeSignature: applyMeter,
           onCountIn: (countInBars) => edit({ countInBars }),
           onUndo: undo,
@@ -808,7 +813,7 @@ export function SongEditor({ id }: { id: string }) {
               </Card>
               <CountInSettings draft={draft} set={edit} />
               <Card title="Live arrangement" subtitle="Order the band will play. Repeats and skips jump sample-accurately — no re-render needed.">
-                <ArrangementEditor sections={sections} value={draft.arrangement} onChange={(arrangement) => edit({ arrangement })} />
+                <ArrangementEditor sections={sections} rawSections={draft.sections} value={draft.arrangement} onChange={(arrangement) => edit({ arrangement })} />
               </Card>
               <Card title="Backing track" subtitle="What plays in FOH"
                 actions={needsRender ? <Badge tone="warn">Needs render</Badge> : draft.rendered.backing ? <Badge tone="ok">Rendered</Badge> : null}>
@@ -837,8 +842,9 @@ export function SongEditor({ id }: { id: string }) {
                 </div>
               </Card>
               {isLoaded && loaded && <RehearsalMixer tracks={loaded.tracks} />}
-              <Card title="Ask the assistant" subtitle="Local Ollama · suggestions only, you confirm">
+              <Card title="Ask the assistant (optional)" subtitle="Ollama when available · otherwise built-in rules · you always confirm">
                 <AiAssistant
+                  warmUp
                   placeholder="e.g. “count-in 2 bar” or “geser downbeat ke awal musik”"
                   examples={["Drummer tidak main, bassist main", "Count-in 2 bar", "Geser downbeat ke awal musik", "Pakai tempo yang lebih cepat"]}
                   run={async (text) => {

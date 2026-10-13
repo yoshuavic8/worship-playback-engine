@@ -138,7 +138,7 @@ def run(req: PrepareRequest) -> dict:
         harmonic = None
         if stems and "other" in stems and "bass" in stems:
             harmonic = io.resample((stems["other"] + stems["bass"]).mean(axis=0)[None], sr, 22050)[0]
-        key, key_conf = detect_key(harmonic if harmonic is not None else y, 22050)
+        key, key_conf, key_pc, key_mode = detect_key(harmonic if harmonic is not None else y, 22050)
         p.stage("analyze", 0.6, "Detecting sections")
         sections = detect_sections(y, 22050, tempo.bpm, tempo.beat_offset, bpb)
 
@@ -152,6 +152,8 @@ def run(req: PrepareRequest) -> dict:
             "bpmAlternatives": tempo.alternatives,
             "key": key,
             "keyConfidence": key_conf,
+            "keyPitchClass": key_pc,
+            "keyMode": key_mode,
             "timeSignature": req.time_signature,
             "duration": round(duration, 3),
             "sections": sections,

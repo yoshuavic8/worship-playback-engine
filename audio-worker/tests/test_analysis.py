@@ -62,16 +62,22 @@ def test_fast_song_reports_double_tempo():
 
 def test_key_is_a_major(synth):
     y, _ = synth
-    key, conf = detect_key(y, 22050)
+    key, conf, pc, mode = detect_key(y, 22050)
     assert key in ("A", "F#m"), key  # relative minor is an acceptable confusion
     assert conf > 0
+    assert 0 <= pc <= 11
+    assert mode in ("major", "minor")
 
 
 def test_key_profile_rotation():
     c_major = np.zeros(12)
     c_major[[0, 4, 7]] = 1.0
     c_major[[2, 5, 9, 11]] = 0.5
-    assert key_from_chroma(c_major)[0] == "C"
+    label, conf, pc, mode = key_from_chroma(c_major)
+    assert label == "C"
+    assert pc == 0
+    assert mode == "major"
+    assert conf > 0
 
 
 def test_sections_find_structure(synth):

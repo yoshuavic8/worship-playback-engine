@@ -1,15 +1,19 @@
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Plus, RotateCcw, X } from "lucide-react";
+import { Copy, Plus, RotateCcw, X } from "lucide-react";
 import { useMemo } from "react";
+import { arrangementPresetOptions, applyArrangementPreset, type ArrangementPresetId } from "@/lib/arrangementPresets";
 import { fmtTime } from "@/lib/format";
 import { sectionColor, type ResolvedSection } from "@/lib/sections";
+import type { Section } from "@/lib/types";
 import { Button } from "./ui";
 
 /** Arrangement = ordered list of section ids. Entries get a positional key so repeats can be dragged. */
-export function ArrangementEditor({ sections, value, onChange }: {
+export function ArrangementEditor({ sections, value, onChange, rawSections }: {
   sections: ResolvedSection[]; value: string[]; onChange: (v: string[]) => void;
+  /** Original section records (for preset matching by kind). */
+  rawSections?: Section[];
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const natural = value.length === 0;
@@ -33,7 +37,19 @@ export function ArrangementEditor({ sections, value, onChange }: {
             {items.map((it, i) => {
               const s = byId(it.id);
               if (!s) return null;
-              return <Chip key={it.key} id={it.key} section={s} onRemove={() => onChange(order.filter((_, j) => j !== i))} />;
+              return (
+                <Chip
+                  key={it.key}
+                  id={it.key}
+                  section={s}
+                  onDuplicate={() => {
+                    const next = [...order];
+                    next.splice(i + 1, 0, it.id);
+                    onChange(next);
+                  }}
+                  onRemove={() => onChange(order.filter((_, j) => j !== i))}
+                />
+              );
             })}
           </SortableContext>
         </DndContext>
@@ -42,6 +58,20 @@ export function ArrangementEditor({ sections, value, onChange }: {
       <div className="mt-2 flex items-center justify-between text-xs text-muted">
         <span>{natural ? "Natural order (as recorded)" : `Custom arrangement · ${order.length} parts`} · {fmtTime(total)}</span>
         {!natural && <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3.5" />} onClick={() => onChange([])}>Natural order</Button>}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="label">Presets</div>
+        {arrangementPresetOptions().map((p) => (
+          <Button
+            key={p.id}
+            size="sm"
+            variant="outline"
+            disabled={!rawSections?.length}
+            onClick={() => rawSections && onChange(applyArrangementPreset(rawSections, p.id as ArrangementPresetId))}
+          >
+            {p.label}
+          </Button>
+        ))}
       </div>
       <div className="mt-3">
         <div className="label mb-1.5">Add section to arrangement</div>
@@ -64,7 +94,7 @@ export function ArrangementEditor({ sections, value, onChange }: {
   );
 }
 
-function Chip({ id, section, onRemove }: { id: string; section: ResolvedSection; onRemove: () => void }) {
+function Chip({ id, section, onRemove, onDuplicate }: { id: string; section: ResolvedSection; onRemove: () => void; onDuplicate: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const color = sectionColor(section.kind);
   const dur = section.end - section.start;
@@ -80,7 +110,10 @@ function Chip({ id, section, onRemove }: { id: string; section: ResolvedSection;
         <span style={{ color }}>{section.label}</span>
         <span className="tnum mt-0.5 text-[0.6rem] font-normal opacity-50">{fmtTime(dur)}</span>
       </div>
-      <button onPointerDown={(e) => e.stopPropagation()} onClick={onRemove} className="grid size-5 place-items-center rounded text-muted opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-fg" aria-label={`Remove ${section.label}`}>
+      <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={onDuplicate} className="grid size-5 place-items-center rounded text-muted opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-fg" aria-label={`Duplicate ${section.label}`}>
+        <Copy className="size-3" />
+      </button>
+      <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={onRemove} className="grid size-5 place-items-center rounded text-muted opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-fg" aria-label={`Remove ${section.label}`}>
         <X className="size-3" />
       </button>
     </div>

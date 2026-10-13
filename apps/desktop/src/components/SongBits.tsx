@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
 import { useApp } from "@/store/app";
 import { visibleReviewWarnings } from "@/lib/reviewWarnings";
+import { formatKeyDisplay } from "@/lib/keyDisplay";
 import type { Song, SongStatus } from "@/lib/types";
 import { Badge } from "./ui";
 
@@ -42,7 +43,7 @@ export function SongStatusBadge({ song }: { song: Song }) {
 export function KeyBpm({ song, className = "" }: { song: Pick<Song, "key" | "bpm" | "timeSignature">; className?: string }) {
   return (
     <span className={`tnum inline-flex items-center gap-2 text-fg-2 ${className}`}>
-      <span className="min-w-[2.2ch] font-semibold text-fg">{song.key ?? "—"}</span>
+      <span className="min-w-[2.2ch] font-semibold text-fg" title={song.key ?? undefined}>{formatKeyDisplay(song.key)}</span>
       <span className="text-faint">·</span>
       <span>{song.bpm ? `${Math.round(song.bpm * 1000) / 1000}` : "—"} <span className="text-muted">BPM</span></span>
       {song.timeSignature !== "4/4" && (

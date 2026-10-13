@@ -1,0 +1,25 @@
+{
+  "uv": {
+    "version": "0.5.14",
+    "license": "MIT OR Apache-2.0",
+    "source": "https://github.com/astral-sh/uv",
+    "archives": {
+      "aarch64-apple-darwin": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.5.14/uv-aarch64-apple-darwin.tar.gz",
+        "sha256": "d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
+      },
+      "x86_64-apple-darwin": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.5.14/uv-x86_64-apple-darwin.tar.gz",
+        "sha256": "8caf91b936ede1167abaebae07c2a1cbb22473355fa0ad7ebb2580307e84fb47"
+      }
+    }
+  },
+  "ffmpeg": {
+    "version": "7.1.1",
+    "license": "LGPL-2.1-or-later",
+    "source": "https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz",
+    "sourceTarballSha256": "733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1",
+    "buildFlags": "--disable-gpl --disable-nonfree --enable-static --disable-shared",
+    "notes": "Built by scripts/build-ffmpeg-lgpl.sh; source tarball cached under apps/desktop/src-tauri/binaries/.cache; object files under $HOME/.cache/wpe-ffmpeg-build (override WPE_FFMPEG_BUILD_ROOT). otool -L must show only /usr/lib and /System. Dev-only PATH copy: ALLOW_SYSTEM_FFMPEG_COPY=1 (not for release)."
+  }
+}

@@ -686,6 +686,8 @@ fn row_to_song(r: &Row) -> rusqlite::Result<Song> {
         artist: r.get("artist")?,
         bpm: r.get("bpm")?,
         key: r.get("song_key")?,
+        key_pitch_class: None,
+        key_mode: None,
         time_signature: r.get("time_signature")?,
         beat_offset: r.get("beat_offset")?,
         duration: r.get("duration")?,
@@ -718,6 +720,15 @@ fn row_to_song(r: &Row) -> rusqlite::Result<Song> {
         .as_ref()
         .and_then(|a| a.get("grid"))
         .and_then(|g| serde_json::from_value(g.clone()).ok());
+    if let Some(a) = song.analysis.as_ref() {
+        if let Some(pc) = a.get("keyPitchClass").and_then(|v| v.as_u64()) {
+            song.key_pitch_class = Some(pc as u8);
+        }
+        if let Some(m) = a.get("keyMode").and_then(|v| v.as_str()) {
+            song.key_mode = Some(m.into());
+        }
+    }
+    crate::keys::sync_key_fields(&mut song.key, &mut song.key_pitch_class, &mut song.key_mode);
     Ok(song)
 }
 
@@ -754,6 +765,8 @@ mod tests {
             artist: "Test".into(),
             bpm: Some(72.0),
             key: Some("A".into()),
+            key_pitch_class: Some(9),
+            key_mode: Some("major".into()),
             time_signature: "4/4".into(),
             beat_offset: 0.0,
             duration: 200.0,

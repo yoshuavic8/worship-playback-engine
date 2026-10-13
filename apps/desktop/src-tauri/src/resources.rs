@@ -276,7 +276,7 @@ impl ResourceManager {
             .collect()
     }
 
-    fn set_progress(&self, ctx: &Ctx, id: &str, p: Progress) {
+    pub(crate) fn set_progress(&self, ctx: &Ctx, id: &str, p: Progress) {
         self.progress.lock().insert(id.into(), p.clone());
         let _ = ctx.app.emit("resource:progress", serde_json::json!({ "id": id, "progress": p }));
     }
@@ -455,9 +455,81 @@ fn download_resource(
 
 static ENV_BUSY: AtomicBool = AtomicBool::new(false);
 
-/// Build the local Python environment from the locked dependency list using `uv`.
+fn run_uv_python_and_sync(ctx: &Ctx, uv: &Path, emit: &dyn Fn(&str, bool, Option<String>)) -> Result<()> {
+    let paths = ctx.paths.read().clone();
+    let install_dir = paths.python_install();
+    emit("Mengunduh Python 3.12 (uv)…", false, None);
+    let mut py = Command::new(uv);
+    py.args(["python", "install", "3.12"])
+        .env("UV_PYTHON_INSTALL_DIR", &install_dir)
+        .env("UV_NO_PROGRESS", "1");
+    let st = py.status().context("uv python install")?;
+    if !st.success() {
+        return Err(anyhow!("uv python install failed"));
+    }
+    emit("Menginstal paket audio (uv sync)…", false, None);
+    let mut child = Command::new(uv)
+        .args(["sync", "--frozen", "--no-dev", "--python", "3.12"])
+        .current_dir(&ctx.worker_dir)
+        .env("UV_PYTHON_INSTALL_DIR", &install_dir)
+        .env("UV_PROJECT_ENVIRONMENT", paths.python_env())
+        .env("UV_NO_PROGRESS", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stderr_log = String::new();
+    if let Some(err) = child.stderr.take() {
+        for line in BufReader::new(err).lines().map_while(Result::ok) {
+            let l = line.trim();
+            if !l.is_empty() {
+                stderr_log.push_str(l);
+                stderr_log.push('\n');
+                logs::info(cat::SYSTEM, format!("uv: {l}"));
+                emit(l, false, None);
+            }
+        }
+    }
+    let st = child.wait()?;
+    if !st.success() {
+        let msg = if stderr_log.trim().is_empty() {
+            "uv sync failed. See Diagnostics → Logs.".into()
+        } else {
+            crate::compat::humanize_uv_sync_error(&stderr_log)
+        };
+        return Err(anyhow!("{msg}"));
+    }
+    Ok(())
+}
+
+/// Synchronous engine install (used by setup wizard).
+pub fn install_python_env_sync(ctx: Arc<Ctx>) -> Result<()> {
+    let uv = find_tool("uv").ok_or_else(|| anyhow!("Bundled uv sidecar not found. Reinstall the app."))?;
+    if ENV_BUSY.swap(true, Ordering::SeqCst) {
+        return Err(anyhow!("The Python environment is already being installed"));
+    }
+    let emit = |msg: &str, done: bool, error: Option<String>| {
+        let _ = ctx.app.emit(
+            "resource:progress",
+            serde_json::json!({ "id": "python-env", "progress": { "message": msg, "active": !done, "error": error, "downloaded": 0, "total": 0 } }),
+        );
+    };
+    let result = run_uv_python_and_sync(&ctx, &uv, &emit);
+    match result {
+        Ok(()) => emit("Python environment ready", true, None),
+        Err(e) => {
+            emit(&format!("{e:#}"), true, Some(format!("{e:#}")));
+            ENV_BUSY.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    }
+    ENV_BUSY.store(false, Ordering::SeqCst);
+    let _ = ctx.app.emit("resource:changed", "python-env");
+    Ok(())
+}
+
+/// Build the local Python environment from the locked dependency list using bundled `uv`.
 pub fn install_python_env(ctx: Arc<Ctx>) -> Result<()> {
-    let uv = find_tool("uv").ok_or_else(|| anyhow!("uv was not found. Install it with: brew install uv"))?;
+    let uv = find_tool("uv").ok_or_else(|| anyhow!("Bundled uv sidecar not found. Reinstall the app."))?;
     if ENV_BUSY.swap(true, Ordering::SeqCst) {
         return Err(anyhow!("The Python environment is already being installed"));
     }
@@ -468,32 +540,7 @@ pub fn install_python_env(ctx: Arc<Ctx>) -> Result<()> {
                 serde_json::json!({ "id": "python-env", "progress": { "message": msg, "active": !done, "error": error, "downloaded": 0, "total": 0 } }),
             );
         };
-        emit("Resolving locked dependencies…", false, None);
-        let paths = ctx.paths.read().clone();
-        let result = (|| -> Result<()> {
-            let mut child = Command::new(&uv)
-                .args(["sync", "--frozen", "--no-dev", "--python", "3.12"])
-                .current_dir(&ctx.worker_dir)
-                .env("UV_PROJECT_ENVIRONMENT", paths.python_env())
-                .env("UV_NO_PROGRESS", "1")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?;
-            if let Some(err) = child.stderr.take() {
-                for line in BufReader::new(err).lines().map_while(Result::ok) {
-                    let l = line.trim();
-                    if !l.is_empty() {
-                        logs::info(cat::SYSTEM, format!("uv: {l}"));
-                        emit(l, false, None);
-                    }
-                }
-            }
-            let st = child.wait()?;
-            if !st.success() {
-                return Err(anyhow!("uv sync failed (exit {:?}). See Diagnostics → Logs.", st.code()));
-            }
-            Ok(())
-        })();
+        let result = run_uv_python_and_sync(&ctx, &uv, &emit);
         match result {
             Ok(()) => emit("Python environment ready", true, None),
             Err(e) => emit(&format!("{e:#}"), true, Some(format!("{e:#}"))),
@@ -501,6 +548,77 @@ pub fn install_python_env(ctx: Arc<Ctx>) -> Result<()> {
         ENV_BUSY.store(false, Ordering::SeqCst);
         let _ = ctx.app.emit("resource:changed", "python-env");
     });
+    Ok(())
+}
+
+pub fn download_with_retries(ctx: Arc<Ctx>, id: &str, attempts: u32) -> Result<()> {
+    let mut delay_ms = 2000u64;
+    let mut last = None;
+    for attempt in 1..=attempts {
+        if let Err(e) = download_blocking(ctx.clone(), id) {
+            last = Some(e);
+            if attempt < attempts {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                delay_ms = (delay_ms * 2).min(60_000);
+            }
+        } else {
+            return Ok(());
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow!("download failed")))
+}
+
+fn download_blocking(ctx: Arc<Ctx>, id: &str) -> Result<()> {
+    let def = catalog().into_iter().find(|d| d.id == id).ok_or_else(|| anyhow!("Unknown resource"))?;
+    let flag = Arc::new(AtomicBool::new(false));
+    let total: u64 = def.files.iter().map(|f| f.size).sum();
+    ctx.resources.set_progress(
+        &ctx,
+        id,
+        Progress {
+            total,
+            active: true,
+            message: "Starting download".into(),
+            ..Default::default()
+        },
+    );
+    download_resource(&ctx, &def, &flag, |downloaded, msg| {
+        ctx.resources.set_progress(
+            &ctx,
+            id,
+            Progress {
+                downloaded,
+                total,
+                message: msg,
+                active: true,
+                error: None,
+            },
+        );
+    })?;
+    let paths = ctx.paths.read().clone();
+    let dir = resource_dir(&paths, &def);
+    let _ = ctx.db.set_resource(
+        def.id,
+        def.kind,
+        def.name,
+        def.version,
+        "installed",
+        total,
+        Some(&dir.to_string_lossy()),
+        Some(&serde_json::json!({ "license": def.license, "source": def.source })),
+    );
+    ctx.resources.set_progress(
+        &ctx,
+        id,
+        Progress {
+            downloaded: total,
+            total,
+            message: "Installed and verified".into(),
+            active: false,
+            error: None,
+        },
+    );
+    let _ = ctx.app.emit("resource:changed", id);
     Ok(())
 }
 

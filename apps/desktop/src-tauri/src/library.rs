@@ -103,6 +103,8 @@ pub fn import_file(db: &Db, songs_dir: &Path, src: &Path, defaults: &PrepSetting
         artist,
         bpm: tags.bpm,
         key: tags.key,
+        key_pitch_class: None,
+        key_mode: None,
         time_signature: "4/4".into(),
         beat_offset: 0.0,
         duration: info.duration,

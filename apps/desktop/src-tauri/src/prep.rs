@@ -69,6 +69,8 @@ struct WorkerAnalysis {
     beat_offset: Option<f64>,
     key: Option<String>,
     key_confidence: Option<f64>,
+    key_pitch_class: Option<u8>,
+    key_mode: Option<String>,
     time_signature: Option<String>,
     duration: Option<f64>,
     sections: Vec<WorkerSection>,
@@ -202,7 +204,7 @@ pub fn friendly_error(code: &str, fallback: &str) -> String {
     match code {
         "model_missing" => "The AI separation model is not installed. Open Diagnostics → AI Models to download it.".into(),
         "env_missing" => "The audio preparation environment is not installed. Open Diagnostics and click Install.".into(),
-        "ffmpeg_missing" => "FFmpeg was not found. Install it with: brew install ffmpeg".into(),
+        "ffmpeg_missing" => "FFmpeg was not found. Open Diagnostics → Repair setup.".into(),
         "decode_failed" => "This audio file could not be decoded.".into(),
         "separation_failed" => "The separation engine stopped unexpectedly.".into(),
         "out_of_memory" => "The Mac ran out of memory while separating. Close other apps and retry.".into(),
@@ -443,6 +445,8 @@ fn apply_result(ctx: &Ctx, song_id: &str, opts: &PrepOptions, r: &WorkerResult) 
         }
         if a.key.is_some() && (ow || song.key.is_none()) {
             song.key = a.key.clone();
+            song.key_pitch_class = a.key_pitch_class;
+            song.key_mode = a.key_mode.clone();
         }
         if let Some(ts) = &a.time_signature {
             if ow {
@@ -462,6 +466,12 @@ fn apply_result(ctx: &Ctx, song_id: &str, opts: &PrepOptions, r: &WorkerResult) 
         }
         analysis["bpmConfidence"] = serde_json::json!(a.bpm_confidence);
         analysis["keyConfidence"] = serde_json::json!(a.key_confidence);
+        if let Some(pc) = a.key_pitch_class {
+            analysis["keyPitchClass"] = serde_json::json!(pc);
+        }
+        if let Some(m) = &a.key_mode {
+            analysis["keyMode"] = serde_json::json!(m);
+        }
         analysis["detected"] = serde_json::json!({
             "bpm": a.bpm, "key": a.key, "beatOffset": a.beat_offset, "sectionCount": a.sections.len(),
             "bpmAlternatives": a.bpm_alternatives,

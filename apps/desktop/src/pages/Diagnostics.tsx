@@ -59,7 +59,12 @@ export function Diagnostics() {
   return (
     <div className="pb-10">
       <PageHeader title="Diagnostics" subtitle="Is this Mac ready for Sunday?"
-        actions={<Button variant="ghost" icon={<RefreshCw className={cn("size-4", loading && "animate-spin")} />} onClick={refresh}>Re-check</Button>} />
+        actions={
+          <>
+            <Button variant="outline" onClick={() => ipc.repairSetup().then(refresh).catch((e) => toast.error(errMsg(e)))}>Repair setup</Button>
+            <Button variant="ghost" icon={<RefreshCw className={cn("size-4", loading && "animate-spin")} />} onClick={refresh}>Re-check</Button>
+          </>
+        } />
       <div className="grid grid-cols-12 gap-5 px-8 pt-6">
         <div className="col-span-12 grid grid-cols-3 gap-5">
           <Verdict label="Live playback" value={ready?.playback} desc="Needs only an audio device" />

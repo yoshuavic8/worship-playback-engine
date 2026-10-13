@@ -13,7 +13,7 @@ use crate::player::{LiveInfo, LoadedInfo, PlayContext};
 use crate::prep::PrepOptions;
 use crate::presets::snap_bass_db;
 use crate::settings::AppSettings;
-use crate::{ai, library, preflight, resources, system};
+use crate::{ai, library, ollama_install, preflight, resources, setup, system};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,10 +41,12 @@ pub struct Bootstrap {
     pub version: String,
     pub data_dir: String,
     pub click_sounds: Vec<(String, String)>,
+    pub setup: setup::SetupStatus,
 }
 
 #[tauri::command]
 pub fn get_bootstrap(ctx: S) -> R<Bootstrap> {
+    let ctx = ctx.inner();
     Ok(Bootstrap {
         settings: ctx.settings.read().clone(),
         audio: ctx.audio.read().clone(),
@@ -52,7 +54,49 @@ pub fn get_bootstrap(ctx: S) -> R<Bootstrap> {
         version: env!("CARGO_PKG_VERSION").into(),
         data_dir: ctx.paths.read().root.to_string_lossy().into(),
         click_sounds: ClickSound::all().iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+        setup: setup::evaluate(ctx),
     })
+}
+
+#[tauri::command]
+pub fn setup_status(ctx: S<'_>) -> R<setup::SetupStatus> {
+    Ok(setup::evaluate(&ctx.inner()))
+}
+
+#[tauri::command]
+pub async fn run_setup(ctx: S<'_>) -> R<()> {
+    setup::run_setup(ctx.inner().clone()).map_err(|e| e)
+}
+
+#[tauri::command]
+pub async fn repair_setup(ctx: S<'_>) -> R<()> {
+    setup::repair_setup(ctx.inner().clone()).map_err(|e| e)
+}
+
+#[tauri::command]
+pub fn setup_pause() {
+    setup::pause_setup();
+}
+
+#[tauri::command]
+pub fn setup_resume(ctx: S<'_>) -> R<()> {
+    setup::resume_setup();
+    setup::run_setup(ctx.inner().clone()).map_err(|e| e)
+}
+
+#[tauri::command]
+pub fn ollama_install_info() -> R<ollama_install::OllamaInstallInfo> {
+    Ok(ollama_install::install_info())
+}
+
+#[tauri::command]
+pub async fn ollama_pull_model(ctx: S<'_>, model: String) -> R<ollama_install::PullProgress> {
+    let ctx = ctx.inner().clone();
+    blocking(move || {
+        let url = ctx.settings.read().ollama_url.clone();
+        ollama_install::pull_model(&url, &model).map_err(|e| anyhow::anyhow!(e))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -79,6 +123,9 @@ pub fn save_settings(ctx: S, mut settings: AppSettings) -> R<AppSettings> {
         let root = ctx.paths.read().root.clone();
         *ctx.paths.write() = crate::paths::AppPaths::new(root, settings.library_path.clone().map(PathBuf::from));
         logs::info(cat::SYSTEM, format!("Library location changed to {:?}", settings.library_path));
+    }
+    if old.ollama_enabled != settings.ollama_enabled {
+        crate::compat::invalidate_ollama_cache();
     }
     ctx.db.set_setting("app", &settings).map_err(e)?;
     *ctx.settings.write() = settings.clone();
@@ -294,6 +341,7 @@ pub fn sanitize_song(mut s: Song) -> Song {
     let (n, d) = parse_time_signature(&s.time_signature);
     s.time_signature = format!("{n}/{d}");
     s.key = s.key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty() && k.len() <= 6);
+    crate::keys::sync_key_fields(&mut s.key, &mut s.key_pitch_class, &mut s.key_mode);
     s.beat_offset = s.beat_offset.max(0.0);
     if s.duration > 0.0 {
         s.beat_offset = s.beat_offset.min(s.duration);
@@ -858,6 +906,8 @@ pub struct AiStatus {
     pub model: Option<String>,
     pub available: bool,
     pub models: Vec<String>,
+    pub rules_only: bool,
+    pub compat_profile: String,
 }
 
 #[tauri::command]
@@ -865,28 +915,52 @@ pub async fn ai_status(ctx: S<'_>) -> R<AiStatus> {
     let ctx = ctx.inner().clone();
     blocking(move || {
         let settings = ctx.settings.read().clone();
+        let info = crate::compat::detect();
         let models = if settings.ollama_enabled {
-            system::ollama_models(&settings.ollama_url).unwrap_or_default()
+            crate::compat::probe_ollama_if_enabled(true, &settings.ollama_url)
+                .map(|p| p.models)
+                .unwrap_or_default()
         } else {
             vec![]
         };
         let p = ai::provider(&settings);
-        let model = (p.name() == "ollama").then(|| {
-            settings
-                .ollama_model
-                .clone()
-                .filter(|m| models.contains(m))
-                .or_else(|| models.iter().find(|m| m.starts_with("qwen2.5")).cloned())
-                .or_else(|| models.iter().find(|m| m.contains("llama3")).cloned())
-                .unwrap_or_else(|| models.first().cloned().unwrap_or_default())
-        });
-        Ok(AiStatus { provider: p.name().into(), available: p.name() != "none", model, models })
+        let model = ai::ollama_from_settings(&settings).map(|o| o.model);
+        Ok(AiStatus {
+            provider: p.name().into(),
+            available: p.name() != "none",
+            model,
+            models,
+            rules_only: p.name() == "none",
+            compat_profile: if info.profile == crate::compat::CompatProfile::Full {
+                "full".into()
+            } else {
+                "lite".into()
+            },
+        })
     })
     .await
 }
 
 fn ai_model_name(settings: &AppSettings) -> Option<String> {
-    settings.ollama_model.clone()
+    ai::ollama_from_settings(settings).map(|o| o.model)
+}
+
+#[tauri::command]
+pub fn ai_cancel_request() {
+    ai::cancel_request();
+}
+
+#[tauri::command]
+pub async fn ai_warmup(ctx: S<'_>) -> R<()> {
+    let ctx = ctx.inner().clone();
+    blocking(move || {
+        let settings = ctx.settings.read().clone();
+        if let Some(o) = ai::ollama_from_settings(&settings) {
+            let _ = o.warm_up();
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -902,14 +976,28 @@ pub async fn ai_song_command(ctx: S<'_>, song_id: String, text: String) -> R<ai:
         let p = ai::provider(&settings);
         let user = format!("{}\nMD REQUEST: {text}", ai::song_context(&song));
         logs::info(cat::AI, format!("[{}] song command: {text}", p.name()));
-        let raw = p.complete_json(ai::SONG_SYSTEM_PROMPT, &user, &ai::intent_schema())?;
-        let intent = ai::parse_intent(&raw).map_err(|err| {
-            logs::warn(cat::AI, format!("rejected AI output: {raw}"));
-            err
-        })?;
-        let mut proposal = ai::rules_for_song(&song, &intent);
-        proposal.provider = p.name().into();
-        proposal.model = ai_model_name(&settings);
+        let proposal = if p.name() == "ollama" {
+            match p.complete_json(ai::SONG_SYSTEM_PROMPT, &user, &ai::intent_schema()) {
+                Ok(raw) => {
+                    let intent = ai::parse_intent(&raw).map_err(|err| {
+                        logs::warn(cat::AI, format!("rejected AI output: {raw}"));
+                        err
+                    })?;
+                    let mut proposal = ai::rules_for_song(&song, &intent);
+                    proposal.provider = "ollama".into();
+                    proposal.model = ai_model_name(&settings);
+                    proposal
+                }
+                Err(e) => {
+                    logs::warn(cat::AI, format!("Ollama failed, using rules: {e:#}"));
+                    let mut proposal = ai::proposal_from_text(&song, &text, "rules", None);
+                    proposal.warnings.insert(0, format!("AI unavailable ({e:#}). Used built-in rules instead."));
+                    proposal
+                }
+            }
+        } else {
+            ai::proposal_from_text(&song, &text, "rules", None)
+        };
         logs::info(cat::AI, format!("proposal: {} change(s), {} warning(s)", proposal.changes.len(), proposal.warnings.len()));
         Ok(proposal)
     })
@@ -929,11 +1017,28 @@ pub async fn ai_setlist_command(ctx: S<'_>, text: String) -> R<ai::AiProposal> {
         let p = ai::provider(&settings);
         let user = format!("{}\nREQUEST: {text}", ai::library_context(&library));
         logs::info(cat::AI, format!("[{}] setlist command: {text}", p.name()));
-        let raw = p.complete_json(ai::SETLIST_SYSTEM_PROMPT, &user, &ai::intent_schema())?;
-        let intent = ai::parse_intent(&raw)?;
-        let mut proposal = ai::rules_for_setlist(&library, &intent);
-        proposal.provider = p.name().into();
-        proposal.model = ai_model_name(&settings);
+        let proposal = if p.name() == "ollama" {
+            match p.complete_json(ai::SETLIST_SYSTEM_PROMPT, &user, &ai::intent_schema()) {
+                Ok(raw) => {
+                    let intent = ai::parse_intent(&raw)?;
+                    let mut proposal = ai::rules_for_setlist(&library, &intent);
+                    proposal.provider = "ollama".into();
+                    proposal.model = ai_model_name(&settings);
+                    proposal
+                }
+                Err(e) => {
+                    logs::warn(cat::AI, format!("Ollama setlist failed: {e:#}"));
+                    let mut proposal = ai::rules_for_setlist(&library, &ai::heuristic_intent(&text));
+                    proposal.provider = "rules".into();
+                    proposal.warnings.insert(0, format!("AI unavailable ({e:#}). Used built-in rules instead."));
+                    proposal
+                }
+            }
+        } else {
+            let mut proposal = ai::rules_for_setlist(&library, &ai::heuristic_intent(&text));
+            proposal.provider = "rules".into();
+            proposal
+        };
         Ok(proposal)
     })
     .await

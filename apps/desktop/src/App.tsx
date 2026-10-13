@@ -15,12 +15,15 @@ import { Preparation } from "./pages/Preparation";
 import { SetlistEditor } from "./pages/SetlistEditor";
 import { Setlists } from "./pages/Setlists";
 import { Settings } from "./pages/Settings";
+import { SetupWizard } from "./pages/Setup";
 import { SongEditor } from "./pages/SongEditor";
 import { Songs } from "./pages/Songs";
 import { useApp } from "./store/app";
 
 export default function App() {
   const ready = useApp((s) => s.ready);
+  const setupComplete = useApp((s) => s.setupComplete);
+  const setSetupComplete = useApp((s) => s.setSetupComplete);
   const bootError = useApp((s) => s.bootError);
   const route = useApp((s) => s.route);
   const importing = useApp((s) => s.importing);
@@ -38,6 +41,7 @@ export default function App() {
   }, []);
 
   if (!ready) return <Boot error={bootError} />;
+  if (!setupComplete) return <SetupWizard onDone={() => setSetupComplete(true)} />;
 
   const live = route.page === "live";
   return (

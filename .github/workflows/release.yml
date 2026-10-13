@@ -26,7 +26,7 @@ env:
 
 jobs:
   macos:
-    name: macOS (Apple Silicon)
+    name: macOS (Universal)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -39,7 +39,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -50,9 +50,14 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      - name: Fetch bundled sidecars (uv + static LGPL ffmpeg)
+        run: |
+          chmod +x scripts/fetch-sidecars.sh scripts/build-ffmpeg-lgpl.sh
+          bash scripts/fetch-sidecars.sh
+
       - name: Build DMG
         working-directory: apps/desktop
-        run: npm run tauri -- build --target aarch64-apple-darwin
+        run: npm run build:mac
 
       - name: Collect artifacts
         run: |
@@ -64,7 +69,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-apple-silicon-dmg
+          name: macos-universal-dmg
           path: dist-artifacts/*.dmg
           if-no-files-found: error
 
@@ -75,13 +80,13 @@ jobs:
           files: dist-artifacts/*.dmg
           generate_release_notes: true
           body: |
-            macOS Apple Silicon (M1–M4), macOS 13+. Unsigned open-source build.
+            macOS 12+ universal (Apple Silicon + Intel). Unsigned open-source build.
 
             1. Open the `.dmg` and drag the app to Applications.
             2. Right-click the app → **Open** → **Open**.
             3. If it is still blocked: **System Settings → Privacy & Security → Open Anyway**.
             4. If macOS says the app is damaged: `xattr -cr "/Applications/Worship Playback Engine.app"`
 
-            After first launch, install Homebrew tools if prompted (`brew install ffmpeg uv`), then install the Python environment and models from Diagnostics.
+            First launch runs **Setup** (Python engine + Demucs models). No Homebrew required.
 
             Lagu ibadah **tidak** ikut dalam installer. User memakai file audio sendiri.

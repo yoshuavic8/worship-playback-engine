@@ -68,8 +68,18 @@ export function Dashboard() {
         <Card className="col-span-12 xl:col-span-5" title="System" actions={<Button size="sm" variant="ghost" onClick={() => navigate("diagnostics")}>Details</Button>}>
           <div className="space-y-2.5">
             <ReadyRow icon={<Volume2 className="size-4" />} label="Live playback" value={ready?.playback} hint="Native audio engine, offline" />
-            <ReadyRow icon={<Cpu className="size-4" />} label="Stem preparation" value={ready?.preparation} hint="Demucs on Apple Silicon" onFix={() => navigate("diagnostics")} />
-            <ReadyRow icon={<Bot className="size-4" />} label="AI assistant (Ollama)" value={ready?.ai} hint="Optional — local only" onFix={() => navigate("settings")} />
+            <ReadyRow icon={<Cpu className="size-4" />} label="Stem preparation" value={ready?.preparation} hint={ready?.compat?.separationBackend ?? "Demucs · same models on every Mac"} onFix={() => navigate("diagnostics")} />
+            <ReadyRow icon={<Bot className="size-4" />} label="AI assistant (optional)" value={ready?.ai} hint="Ollama or built-in rules" onFix={() => navigate("settings")} />
+            {ready?.compat && (
+              <div className="rounded-lg border border-line/80 bg-bg-2/40 px-3 py-2 text-xs text-muted">
+                <span className="font-medium text-fg-2">{ready.compat.profile === "full" ? "Full profile" : "Lite profile"}</span>
+                {" · "}
+                {ready.compat.reason}
+                {ready.compat.prepEtaWarning && (
+                  <div className="mt-1 text-warn">{ready.compat.prepEtaWarning}</div>
+                )}
+              </div>
+            )}
           </div>
         </Card>
 

@@ -11,21 +11,22 @@ MAJOR_NAMES = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 MINOR_NAMES = ["Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "Bbm", "Bm"]
 
 
-def key_from_chroma(chroma_mean: np.ndarray) -> tuple[str, float]:
+def key_from_chroma(chroma_mean: np.ndarray) -> tuple[str, float, int, str]:
     c = np.asarray(chroma_mean, dtype=np.float64)
     if c.sum() <= 0:
-        return "C", 0.0
-    scores = []
+        return "C", 0.0, 0, "major"
+    scores: list[tuple[float, str, int, str]] = []
     for i in range(12):
-        scores.append((np.corrcoef(np.roll(MAJOR, i), c)[0, 1], MAJOR_NAMES[i]))
-        scores.append((np.corrcoef(np.roll(MINOR, i), c)[0, 1], MINOR_NAMES[i]))
+        scores.append((np.corrcoef(np.roll(MAJOR, i), c)[0, 1], MAJOR_NAMES[i], i, "major"))
+        scores.append((np.corrcoef(np.roll(MINOR, i), c)[0, 1], MINOR_NAMES[i], i, "minor"))
     scores.sort(key=lambda s: s[0], reverse=True)
     best, second = scores[0][0], scores[1][0]
     conf = float(np.clip((best - second) * 5 + max(best, 0) * 0.5, 0, 1))
-    return scores[0][1], round(conf, 3)
+    _, label, pc, mode = scores[0]
+    return label, round(conf, 3), pc, mode
 
 
-def detect_key(y: np.ndarray, sr: int) -> tuple[str, float]:
+def detect_key(y: np.ndarray, sr: int) -> tuple[str, float, int, str]:
     import librosa
 
     if y.ndim > 1:

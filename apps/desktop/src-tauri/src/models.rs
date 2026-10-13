@@ -210,6 +210,11 @@ pub struct Song {
     pub artist: String,
     pub bpm: Option<f64>,
     pub key: Option<String>,
+    /// 0 = C … 11 = B. Kept in sync with `key` on save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_pitch_class: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_mode: Option<String>,
     pub time_signature: String,
     /// Time (seconds) of the first downbeat, used to anchor the click grid.
     pub beat_offset: f64,

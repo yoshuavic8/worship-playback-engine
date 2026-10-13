@@ -131,7 +131,19 @@ export function install() {
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
     switch (cmd) {
-      case "get_bootstrap": return { settings, audio, presets, version: "0.1.0", dataDir: "/Users/demo/Library/Application Support/app.worshipplayback.engine", clickSounds: [["classic", "Classic"], ["woodblock", "Woodblock"], ["hihat", "Hi-hat"], ["cowbell", "Cowbell"]] };
+      case "setup_status":
+      case "run_setup":
+      case "repair_setup":
+      case "setup_pause":
+      case "setup_resume":
+        return { complete: true, phase: "done", message: "Siap", progress: 1, etaSecs: null, paused: false, steps: [] };
+      case "setup_status":
+      case "run_setup":
+      case "repair_setup":
+      case "setup_pause":
+      case "setup_resume":
+        return { complete: true, phase: "done", message: "Siap", progress: 1, etaSecs: null, paused: false, steps: [] };
+      case "get_bootstrap": return { settings, audio, presets, version: "0.1.0", dataDir: "/Users/demo/Library/Application Support/app.worshipplayback.engine", clickSounds: [["classic", "Classic"], ["woodblock", "Woodblock"], ["hihat", "Hi-hat"], ["cowbell", "Cowbell"]], setup: { complete: true, phase: "done", message: "Siap", progress: 1, etaSecs: null, paused: false, steps: [] } };
       case "list_songs": return songs;
       case "save_song": { const i = songs.findIndex((s) => s.id === a.song.id); songs[i] = { ...a.song, updatedAt: new Date().toISOString() }; return songs[i]; }
       case "accept_song_review": { const s = songs.find((x) => x.id === a.id); if (!s) return null; if (s.analysis) s.analysis = { ...s.analysis, warnings: (s.analysis.warnings ?? []).filter((w) => !/bpm|tempo|uncertain/i.test(w)) }; if (!s.analysis?.warnings?.length && s.rendered.backing) s.status = "ready"; s.updatedAt = new Date().toISOString(); return s; }
@@ -168,21 +180,25 @@ export function install() {
         { id: "click", label: "Click available", level: "ok", detail: "All songs have a BPM" },
       ], songs: [{ songId: "ruang-kudus", title: "Ruang Kudus", level: "warning", issues: ["Still preparing"] }] };
       case "system_readiness": return { checks: [
-        { id: "silicon", label: "Apple Silicon", status: "ok", detail: "Apple M3 detected", hint: null },
-        { id: "macos", label: "macOS", status: "ok", detail: "macOS 26.5 · 16 GB unified memory", hint: null },
+        { id: "profile", label: "Compatibility profile", status: "ok", detail: "Full — Apple Silicon · macOS 26.5 · 16 GB RAM", hint: null },
+        { id: "arch", label: "Architecture", status: "ok", detail: "Apple Silicon (arm64)", hint: null },
+        { id: "macos", label: "macOS", status: "ok", detail: "macOS 26.5 · 16 GB RAM", hint: null },
+        { id: "separation", label: "Separation backend", status: "ok", detail: "MLX (Apple GPU) or PyTorch", hint: null },
         { id: "audio", label: "Audio engine", status: "ok", detail: "Scarlett 4i4 USB · 48000 Hz · 4 outputs", hint: null },
         { id: "ffmpeg", label: "FFmpeg", status: "ok", detail: "ffmpeg version 8.0", hint: null },
         { id: "python", label: "Python environment", status: "ok", detail: "Python 3.12.13", hint: null },
         { id: "mlx", label: "MLX (Apple Silicon)", status: "ok", detail: "demucs-mlx available", hint: null },
         { id: "model", label: "Separation model", status: "ok", detail: "htdemucs · demucs-mlx", hint: null },
         { id: "ollama", label: "Ollama (optional)", status: "ok", detail: "3 models · using qwen2.5:7b", hint: null },
-      ], playback: "READY", preparation: "READY", ai: "READY", ollamaModels: ["qwen2.5:7b", "llama3.1:8b"], appVersion: "0.1.0", dataDir: "/Users/demo/Library/Application Support/app.worshipplayback.engine", libraryDir: "/Users/demo/…/songs", schemaVersion: 1, diskUsage: { songs: 2.1e9, models: 1.68e8, pythonEnv: 1.1e9, cues: 3.2e6 } };
+      ], playback: "READY", preparation: "READY", ai: "READY", ollamaModels: ["qwen2.5:7b", "llama3.1:8b"],
+        compat: { profile: "full", reason: "Apple Silicon · macOS 26.5 · 16 GB RAM", separationBackend: "MLX (Apple GPU) or PyTorch", prepConcurrency: 1, prepEtaWarning: null, mlxAvailable: true, hardware: { archLabel: "Apple Silicon (arm64)", macosVersion: "26.5", ramGb: 16, rosetta: false, appleSilicon: true }, ollamaVersion: "0.12.3" },
+        appVersion: "0.1.0", dataDir: "/Users/demo/Library/Application Support/app.worshipplayback.engine", libraryDir: "/Users/demo/…/songs", schemaVersion: 1, diskUsage: { songs: 2.1e9, models: 1.68e8, pythonEnv: 1.1e9, cues: 3.2e6 } };
       case "list_resources": return [
         { id: "demucs-mlx-htdemucs", kind: "model", engine: "demucs-mlx", model: "htdemucs", name: "HT-Demucs (MLX)", description: "Fastest on Apple Silicon. 4 stems.", version: "1", license: "MIT", source: "https://huggingface.co/ssmall256/demucs-mlx", recommended: true, sizeBytes: 168005865, installed: true, path: "", progress: null },
         { id: "demucs-htdemucs", kind: "model", engine: "demucs", model: "htdemucs", name: "HT-Demucs (PyTorch)", description: "Fallback engine (GPU via MPS or CPU).", version: "4", license: "MIT", source: "https://github.com/adefossez/demucs", recommended: false, sizeBytes: 84141911, installed: false, path: "", progress: { downloaded: 31e6, total: 84141911, message: "Downloading 955717e8-8726e21a.th", error: null, active: true } },
       ];
       case "get_logs": return [{ time: now, level: "info", category: "audio", message: "Audio running on \"Scarlett 4i4 USB\" — 4 ch, 48000 Hz" }, { time: now, level: "info", category: "preparation", message: "separated with demucs-mlx/mlx-gpu in 41.0s (6.3x realtime)" }];
-      case "ai_status": return { provider: "ollama", model: "qwen2.5:7b", available: true, models: ["qwen2.5:7b", "llama3.1:8b"] };
+      case "ai_status": return { provider: "ollama", model: "qwen2.5:7b", available: true, models: ["qwen2.5:7b", "llama3.1:8b"], rulesOnly: false, compatProfile: "full" };
       case "set_downbeat": { const s = songs.find((x) => x.id === a.id); if (s) { s.beatOffset = a.offsetSecs; if (s.grid) s.grid = { ...s.grid, beat1Sec: a.offsetSecs }; } return s ?? null; }
       case "set_grid": {
         const s = songs.find((x) => x.id === a.id);

@@ -16,6 +16,8 @@ export interface Route {
 
 interface AppState {
   ready: boolean;
+  setupComplete: boolean;
+  setSetupComplete: (v: boolean) => void;
   bootError: string | null;
   version: string;
   dataDir: string;
@@ -53,6 +55,8 @@ interface AppState {
 
 export const useApp = create<AppState>((set, get) => ({
   ready: false,
+  setupComplete: true,
+  setSetupComplete: (setupComplete) => set({ setupComplete }),
   bootError: null,
   version: "",
   dataDir: "",
@@ -80,6 +84,7 @@ export const useApp = create<AppState>((set, get) => ({
       setUiLocale(b.settings.uiLocale === "id" ? "id" : "en");
       set({
         ready: true,
+        setupComplete: b.setup.complete,
         version: b.version,
         dataDir: b.dataDir,
         clickSounds: b.clickSounds,

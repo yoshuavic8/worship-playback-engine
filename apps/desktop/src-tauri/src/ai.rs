@@ -6,11 +6,24 @@
 //! AI prepares. Rules decide. Audio Engine performs.
 //! The LLM can never execute commands, touch files, download anything or reach the audio engine.
 
+use crate::compat::{self, CompatInfo, CompatProfile};
 use crate::models::*;
 use crate::presets::{builtin_presets, snap_bass_db};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+static AI_CANCEL: AtomicBool = AtomicBool::new(false);
+
+pub fn cancel_request() {
+    AI_CANCEL.store(true, Ordering::SeqCst);
+}
+
+pub fn clear_cancel() {
+    AI_CANCEL.store(false, Ordering::SeqCst);
+}
 
 pub trait AIProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -33,6 +46,47 @@ impl AIProvider for NoAIProvider {
 pub struct OllamaProvider {
     pub url: String,
     pub model: String,
+    pub num_ctx: u32,
+}
+
+impl OllamaProvider {
+    pub fn for_settings(settings: &crate::settings::AppSettings, info: &CompatInfo) -> Option<Self> {
+        if !settings.ollama_enabled {
+            return None;
+        }
+        let probe = compat::probe_ollama_if_enabled(settings.ollama_enabled, &settings.ollama_url).ok()?;
+        if probe.models.is_empty() {
+            return None;
+        }
+        let model = compat::pick_ollama_model(
+            settings.ollama_model.as_deref(),
+            &probe.models,
+            info,
+        )?;
+        let num_ctx = if info.profile == CompatProfile::Lite { 2048 } else { 4096 };
+        Some(Self {
+            url: settings.ollama_url.clone(),
+            model,
+            num_ctx,
+        })
+    }
+
+    pub fn warm_up(&self) -> Result<()> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .build()?;
+        let body = serde_json::json!({
+            "model": self.model,
+            "stream": false,
+            "keep_alive": "30m",
+            "messages": [{ "role": "user", "content": "ok" }]
+        });
+        let _ = client
+            .post(format!("{}/api/chat", self.url.trim_end_matches('/')))
+            .json(&body)
+            .send();
+        Ok(())
+    }
 }
 
 impl AIProvider for OllamaProvider {
@@ -40,13 +94,16 @@ impl AIProvider for OllamaProvider {
         "ollama"
     }
     fn complete_json(&self, system: &str, user: &str, schema: &serde_json::Value) -> Result<String> {
-        let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(90)).build()?;
+        clear_cancel();
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(320))
+            .build()?;
         let body = serde_json::json!({
             "model": self.model,
-            "stream": false,
+            "stream": true,
             "format": schema,
-            "options": { "temperature": 0, "num_ctx": 8192 },
-            "keep_alive": "5m",
+            "options": { "temperature": 0, "num_ctx": self.num_ctx },
+            "keep_alive": "30m",
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user", "content": user }
@@ -60,32 +117,120 @@ impl AIProvider for OllamaProvider {
         if !r.status().is_success() {
             return Err(anyhow!("Ollama returned {}", r.status()));
         }
-        let j: serde_json::Value = r.json()?;
-        j["message"]["content"]
-            .as_str()
-            .map(String::from)
-            .ok_or_else(|| anyhow!("Ollama returned no content"))
+        let mut reader = BufReader::new(r);
+        let mut line = String::new();
+        let mut content = String::new();
+        let started = Instant::now();
+        let total = Duration::from_secs(300);
+        let chunk_idle = Duration::from_secs(60);
+        let mut last = Instant::now();
+        loop {
+            if AI_CANCEL.load(Ordering::SeqCst) {
+                return Err(anyhow!("Request cancelled"));
+            }
+            if started.elapsed() > total {
+                return Err(anyhow!("Ollama timed out after 300 seconds"));
+            }
+            if last.elapsed() > chunk_idle && !content.is_empty() {
+                return Err(anyhow!("Ollama stopped responding (60s idle)"));
+            }
+            line.clear();
+            let n = reader.read_line(&mut line).map_err(|e| anyhow!("Ollama stream read failed ({e})"))?;
+            if n == 0 {
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let j: serde_json::Value = serde_json::from_str(trimmed)
+                .map_err(|e| anyhow!("Ollama stream was not JSON ({e})"))?;
+            if let Some(part) = j["message"]["content"].as_str() {
+                content.push_str(part);
+                last = Instant::now();
+            }
+            if j["done"].as_bool() == Some(true) {
+                break;
+            }
+        }
+        if content.trim().is_empty() {
+            return Err(anyhow!("Ollama returned no content"));
+        }
+        Ok(content)
     }
 }
 
 /// Pick the provider: Ollama if enabled and reachable, otherwise NoAIProvider.
 pub fn provider(settings: &crate::settings::AppSettings) -> Box<dyn AIProvider> {
-    if !settings.ollama_enabled {
-        return Box::new(NoAIProvider);
+    let info = compat::detect();
+    match OllamaProvider::for_settings(settings, &info) {
+        Some(p) => Box::new(p),
+        None => Box::new(NoAIProvider),
     }
-    match crate::system::ollama_models(&settings.ollama_url) {
-        Ok(models) if !models.is_empty() => {
-            let model = settings
-                .ollama_model
-                .clone()
-                .filter(|m| models.contains(m))
-                .or_else(|| models.iter().find(|m| m.starts_with("qwen2.5")).cloned())
-                .or_else(|| models.iter().find(|m| m.contains("llama3")).cloned())
-                .unwrap_or_else(|| models[0].clone());
-            Box::new(OllamaProvider { url: settings.ollama_url.clone(), model })
+}
+
+pub fn ollama_from_settings(settings: &crate::settings::AppSettings) -> Option<OllamaProvider> {
+    OllamaProvider::for_settings(settings, &compat::detect())
+}
+
+/// Best-effort intent from plain text when Ollama is off or failed. Feeds the rules engine.
+pub fn heuristic_intent(text: &str) -> AiIntent {
+    let t = text.to_lowercase();
+    let mut it = AiIntent {
+        intent: "update_song".into(),
+        explanation: "Matched built-in rules (no AI model).".into(),
+        ..Default::default()
+    };
+
+    if t.contains("no drummer") || t.contains("tanpa drum") || (t.contains("drummer") && t.contains("tidak")) {
+        it.preset = Some("NO_DRUMMER".into());
+        it.drums = Some("KEEP".into());
+    } else if t.contains("no bass") || t.contains("tanpa bass") || (t.contains("bass") && t.contains("tidak main")) {
+        it.preset = Some("NO_BASS_PLAYER".into());
+    } else if t.contains("full track") || t.contains("full band") {
+        it.preset = Some(if t.contains("full track") { "FULL_TRACK" } else { "FULL_BAND" }.into());
+    }
+
+    if t.contains("count-in") || t.contains("count in") || t.contains("hitungan") {
+        for n in [4, 3, 2, 1] {
+            if t.contains(&format!("{n} bar")) || t.contains(&format!("{n} bars")) || t.contains(&format!("{n} bir")) {
+                it.count_in_bars = Some(n as f64);
+                break;
+            }
         }
-        _ => Box::new(NoAIProvider),
+        if it.count_in_bars.is_none() && t.contains("2") {
+            it.count_in_bars = Some(2.0);
+        }
     }
+
+    if t.contains("musical start") || t.contains("awal musik") || t.contains("downbeat") {
+        it.snap_downbeat = Some("musical_start".into());
+    }
+
+    if t.contains("half tempo") || t.contains("setengah tempo") {
+        it.bpm_scale = Some(0.5);
+    } else if t.contains("double tempo") || t.contains("dua kali") {
+        it.bpm_scale = Some(2.0);
+    }
+
+    if t.contains("arrangement") || t.contains("struktur") || t.contains("skip") {
+        it.intent = "arrangement".into();
+    }
+
+    it
+}
+
+pub fn proposal_from_text(song: &Song, text: &str, provider: &str, model: Option<String>) -> AiProposal {
+    let intent = heuristic_intent(text);
+    let mut p = rules_for_song(song, &intent);
+    p.provider = provider.into();
+    p.model = model;
+    if p.changes.is_empty() && p.arrangement.is_none() && p.timeline.is_none() {
+        p.warnings.push(
+            "No rule matched that request. Use the arrangement editor, presets, or timeline controls — or enable Ollama for natural language.".into(),
+        );
+    }
+    p
 }
 
 // ---------------- schema ----------------
@@ -1012,5 +1157,20 @@ mod tests {
         let p = rules_for_setlist(&lib, &parse_intent(raw).unwrap());
         assert_eq!(p.setlist_song_ids, vec!["g"]);
         assert_eq!(p.warnings.len(), 1);
+    }
+
+    #[test]
+    fn heuristic_no_drummer_preset() {
+        let it = heuristic_intent("drummer tidak main, bassist main");
+        assert_eq!(it.preset.as_deref(), Some("NO_DRUMMER"));
+        let p = rules_for_song(&song(), &it);
+        assert_eq!(p.prep.as_ref().unwrap().drums, StemMode::Keep);
+    }
+
+    #[test]
+    fn proposal_without_ollama_uses_rules() {
+        let p = proposal_from_text(&song(), "count-in 2 bar", "rules", None);
+        assert_eq!(p.provider, "rules");
+        assert_eq!(p.timeline.as_ref().and_then(|t| t.count_in_bars), Some(2));
     }
 }

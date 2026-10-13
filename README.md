@@ -4,11 +4,11 @@
 
 Local-first desktop app for church worship teams. Import a song, prepare a live-ready backing track (stems, click, cue, sections, tempo map), then run the set on Sunday — offline, no subscription, no cloud AI.
 
-macOS Apple Silicon only (M1–M4). MIT licensed.
+macOS 12+ universal (Apple Silicon + Intel). MIT licensed. **No Apple Developer account required** — releases are ad-hoc signed.
 
 ## Install from GitHub Releases
 
-Builds are **ad-hoc signed, not Apple-notarized**. That is normal for unsigned open-source Mac apps. macOS will ask you to allow the app once.
+Builds are **ad-hoc signed, not Apple-notarized**. macOS will ask you to allow the app once.
 
 ### English
 
@@ -16,7 +16,7 @@ Builds are **ad-hoc signed, not Apple-notarized**. That is normal for unsigned o
 2. Open it and drag **Worship Playback Engine** into `/Applications`.
 3. **Right-click** the app → **Open** → **Open**. Do not double-click the first time.
 4. If it is still blocked: **System Settings → Privacy & Security → Open Anyway**.
-5. If macOS says the app is damaged (common on Apple Silicon when Gatekeeper quarantines a GitHub download):
+5. If macOS says the app is damaged (common when Gatekeeper quarantines a GitHub download):
 
 ```bash
 xattr -cr "/Applications/Worship Playback Engine.app"
@@ -24,97 +24,62 @@ xattr -cr "/Applications/Worship Playback Engine.app"
 
 Then right-click → Open again.
 
+6. On first launch, complete **Setup** (Python engine + separation models). Everything downloads once, then works offline.
+
 ### Bahasa Indonesia
 
-1. Unduh file `.dmg` dari halaman **Releases**.
-2. Buka, lalu tarik aplikasinya ke folder **Applications**.
-3. **Klik kanan** app → **Open** → **Open**. Jangan double-click pada pembukaan pertama.
-4. Jika masih diblokir: **System Settings → Privacy & Security → Open Anyway**.
-5. Jika macOS bilang app rusak / *damaged*:
+1. Unduh `.dmg` dari halaman **Releases**.
+2. Tarik aplikasi ke **Applications**.
+3. **Klik kanan** → **Open** → **Open** (bukan double-click pertama kali).
+4. Jika diblokir: **System Settings → Privacy & Security → Open Anyway**.
+5. Jika “damaged”:
 
 ```bash
 xattr -cr "/Applications/Worship Playback Engine.app"
 ```
 
-Lalu klik kanan → Open lagi. Ini izin Gatekeeper, bukan crack dan bukan pelanggaran lisensi.
-
-### After first launch
-
-Preparation needs two Homebrew tools and a one-time Python environment:
-
-```bash
-brew install ffmpeg uv
-```
-
-In the app, open **Diagnostics** and install the Python environment, then download the recommended models (Demucs / UVR). Models are MIT or community-licensed weights; they are not inside the `.dmg`.
+6. Saat pertama dibuka, selesaikan **Persiapan** (mesin Python + model Demucs). Setelah itu offline penuh.
 
 You supply your own songs. This project never ships copyrighted worship recordings.
 
-## Requirements
+## System requirements
 
-- macOS 13 or later
-- Apple Silicon (M1, M2, M3, or M4)
-- [Homebrew](https://brew.sh) for `ffmpeg` and `uv` (Python package manager)
+| | |
+|---|---|
+| OS | macOS **12 Monterey** or later; keep Safari updated (WebKit 16.4+ for the UI) |
+| **Full profile** | Apple Silicon, macOS 13.5+ — MLX + PyTorch, faster prep |
+| **Lite profile** | Intel or older macOS — same Demucs models, slower CPU prep |
+| Disk | ~2–3 GB after Setup (Python env + models) |
+| Optional AI | [Ollama](https://ollama.com) — app is fully usable without it |
 
-Intel Macs are not supported. The audio worker lockfile and MLX Demucs path target `darwin-arm64` only.
+**No Homebrew, Xcode CLT, or manual `ffmpeg`/`uv` install** for end users. Those tools are bundled as sidecars; Setup installs Python via bundled `uv`.
 
-## Build a release on GitHub
+## Third-party licenses
 
-After this repo is on GitHub (public is free for macOS runners):
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (Demucs MIT, model weights, FFmpeg LGPL, uv, Python, Tauri, etc.).
 
-**Manual:** Actions → **Release** → **Run workflow**. Download the `.dmg` from the run artifacts.
-
-**Tagged release:**
+## Build a release (maintainers)
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
+chmod +x scripts/fetch-sidecars.sh scripts/build-ffmpeg-lgpl.sh
+bash scripts/fetch-sidecars.sh   # pins in scripts/sidecars.manifest.json (static LGPL ffmpeg build)
+cd apps/desktop && npm ci && npm run build:mac
 ```
 
-That publishes a GitHub Release with the `.dmg` attached. CI also runs tests on `main` / pull requests.
+Verify universal binary: `lipo -info …/Worship Playback Engine` → `x86_64 arm64`.
 
-No Apple Developer account is required. To later remove the Gatekeeper prompt, join the [Apple Developer Program](https://developer.apple.com/programs/) (~USD 99/year) and add Developer ID + notarization secrets to the workflow.
+Tagged pushes (`v*`) build on GitHub Actions and attach the `.dmg` to the Release (ad-hoc sign, `GITHUB_TOKEN` only).
 
 ## Develop locally
 
 ```bash
-# Xcode Command Line Tools, Node 20+, Rust stable, Homebrew
-brew install node rustup-init ffmpeg uv
-rustup default stable
-
-cd apps/desktop
-npm install
+cd apps/desktop && npm ci
+# Optional: copy sidecars for Tauri build (or use PATH ffmpeg in dev)
+bash ../../scripts/fetch-sidecars.sh
 npm run tauri dev
 ```
 
-```bash
-npm test            # frontend (apps/desktop)
-npm run typecheck
+In debug builds, `ffmpeg`/`uv` on your **PATH** are used if sidecars are missing.
 
-cargo test          # from apps/desktop/src-tauri
-
-cd audio-worker
-uv sync --group dev
-uv run pytest
-```
-
-Release build on your machine:
-
-```bash
-cd apps/desktop
-npm run tauri -- build --target aarch64-apple-darwin
-```
-
-The `.dmg` lands in `apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/`.
-
-## Layout
-
-```text
-apps/desktop/          Tauri 2 + React + TypeScript
-  src-tauri/           Rust audio engine, SQLite, IPC
-audio-worker/          Python preparation (stems, tempo, sections)
-```
-
-## License
-
-[MIT](LICENSE). Third-party notices and optional model licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Python worker tests: `cd audio-worker && uv run pytest`
