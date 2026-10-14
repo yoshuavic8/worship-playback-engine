@@ -46,6 +46,17 @@ jobs:
           workspaces: apps/desktop/src-tauri
           cache-on-failure: true
 
+      - name: Placeholder Tauri sidecars (build script only)
+        run: |
+          BIN="apps/desktop/src-tauri/binaries"
+          TRIPLE="$(rustc -vV | sed -n 's/host: //p')"
+          mkdir -p "$BIN"
+          for name in uv ffmpeg ffprobe; do
+            f="$BIN/${name}-${TRIPLE}"
+            touch "$f"
+            chmod +x "$f"
+          done
+
       - name: Test
         working-directory: apps/desktop/src-tauri
         run: cargo test
