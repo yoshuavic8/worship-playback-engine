@@ -1237,6 +1237,41 @@ mod tests {
         assert_eq!(status.segment.load(Ordering::Relaxed), 1);
     }
 
+    /// Regression: each spoken count word starts on its beat (< 5 ms) at 70/120/150 BPM,
+    /// even when the TTS file has ~200 ms of leading silence (the cause of late "3"/"4").
+    #[test]
+    fn count_words_land_on_beats() {
+        for bpm in [70.0f64, 120.0, 150.0] {
+            let bus = BusMap { foh: OutputTarget::None, monitor: OutputTarget::Stereo { left: 0, right: 1 } };
+            let (mut m, tx, _) = setup(bus);
+            let fpb = SR as f64 * 60.0 / bpm;
+            let bar = (fpb * 4.0) as u64;
+            let b = Arc::new(AudioBuffer::silent((bar * 5) as usize, SR));
+            let mut s = song(b, vec![(0, bar * 3), (bar * 3, bar * 5)], None);
+            s.click_enabled = false;
+            s.count_cue = true;
+            s.grid = BeatGrid::new(bpm, 0.0, 4, SR);
+            // 200 ms silence then a 400 ms word, like `say` output.
+            let mut w = vec![0.0f32; 9600];
+            w.extend(vec![0.5f32; 19200]);
+            let raw = AudioBuffer::from_mono(&w, SR);
+            s.count_voices = (0..4).map(|_| Arc::new(raw.trimmed_onset(Some((fpb * 0.9) as usize)))).collect();
+            tx.send(MixerCmd::Load(s)).unwrap();
+            tx.send(MixerCmd::Play { count_in: false }).unwrap();
+            let out = run(&mut m, (bar * 3) as usize, 2);
+            for k in 0..4 {
+                let beat = (bar * 2) as f64 + k as f64 * fpb;
+                let from = beat as usize;
+                let on = (from..from + fpb as usize).find(|&i| out[i * 2].abs() > 0.01).expect("word missing");
+                let err_ms = (on as f64 - beat) * 1000.0 / SR as f64;
+                assert!(err_ms.abs() < 5.0, "{bpm} BPM beat {k}: onset {err_ms:.1} ms late");
+                // silent again before the next beat: no overlap/smear
+                let nb = (beat + fpb) as usize - 1;
+                assert!(out[nb * 2].abs() < 0.01, "{bpm} BPM beat {k} rings into next beat");
+            }
+        }
+    }
+
     /// Count-in is whole bars of click, then the song enters on beat 1.
     /// Audio before the downbeat must not play, or the drummer comes in early.
     #[test]

@@ -448,7 +448,7 @@ impl Player {
                     match crate::cue::ensure_cue(&cue_root, voice.as_deref(), &s.label)
                         .and_then(|p| self.get_buffer(&p, rate))
                     {
-                        Ok(b) => Some(b),
+                        Ok(b) => Some(std::sync::Arc::new(b.trimmed_onset(None))),
                         Err(e) => {
                             logs::warn(cat::AUDIO, format!("cue render failed for \"{}\": {e:#}", s.label));
                             missing_cues.push(s.label.clone());
@@ -480,11 +480,21 @@ impl Player {
 
         let bpb = song.beats_per_bar();
         // Spoken "2", "3", … for the bar before each section (cached WAVs, rendered once).
+        // Each count word must finish before the next beat: cap at 90% of the
+        // shortest beat in the grid (tempo changes included).
+        let count_max = grid
+            .as_ref()
+            .map(|g| {
+                let min_gap = g.explicit_beats.windows(2).map(|w| w[1].frame.saturating_sub(w[0].frame)).filter(|d| *d > 0).min();
+                (min_gap.map(|d| d as f64).unwrap_or(g.frames_per_beat).min(g.frames_per_beat) * 0.9) as usize
+            })
+            .unwrap_or(rate as usize / 2);
         let count_voices: Vec<_> = if count_cue && cue_enabled && grid.is_some() {
             (1..=bpb.clamp(1, 12))
                 .filter_map(|n| {
                     crate::cue::ensure_cue(&cue_root, voice.as_deref(), &n.to_string())
                         .and_then(|p| self.get_buffer(&p, rate))
+                        .map(|b| std::sync::Arc::new(b.trimmed_onset(Some(count_max))))
                         .map_err(|e| logs::warn(cat::AUDIO, format!("count cue {n} failed: {e:#}")))
                         .ok()
                 })
