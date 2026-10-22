@@ -230,7 +230,7 @@ function LiveView({ live }: { live: LiveInfo }) {
                 {upcoming?.label ?? (next ? "End of song" : "End of service")}
               </div>
               <div className="mt-1 truncate text-sm text-muted">
-                {upcoming ? (queuedIdx != null ? "At the end of this section" : "In order") : next ? `Then: ${next.title}${item?.transition === "auto" ? " (auto)" : ""}` : ""}
+                {upcoming ? (queuedIdx != null ? (status?.queuedBar ? "At the end of this bar" : "At the end of this section") : "In order") : next ? `Then: ${next.title}${item?.transition === "auto" ? " (auto)" : ""}` : ""}
               </div>
             </div>
           </div>
@@ -238,10 +238,10 @@ function LiveView({ live }: { live: LiveInfo }) {
           {/* section timeline */}
           <div className="mt-5">
             <div className="mb-2 flex items-center justify-between text-xs text-muted">
-              <span>Click a section to jump there at the end of the current one · <span className="text-fg-2">Shift-click</span> jumps now</span>
+              <span>Tap a section (or key 1–9) once: switch when this part ends · <span className="text-fg-2">tap again</span>: switch at the end of this bar · third tap cancels</span>
               {queuedIdx != null && <button className="text-mon hover:underline" onClick={() => ipc.cancelJump()}>Cancel jump</button>}
             </div>
-            <div className="flex h-24 gap-1.5">
+            <div className="flex h-32 gap-2">
               {segs.map((s, i) => {
                 const w = ((s.end - s.start) / total) * 100;
                 const cur = i === segIdx;
@@ -252,14 +252,15 @@ function LiveView({ live }: { live: LiveInfo }) {
                 return (
                   <button key={i} onClick={(e) => jumpTo(i, e.shiftKey)} title={`${s.label} · ${fmtTime(s.end - s.start)}`}
                     style={{ flexGrow: w, flexBasis: 0, borderColor: cur || q ? color : "transparent" }}
-                    className={cn("relative min-w-[3.2rem] overflow-hidden rounded-xl border-2 bg-panel text-left transition-colors hover:bg-panel-2", q && "animate-pulse-soft")}>
+                    className={cn("relative min-w-[3.2rem] overflow-hidden rounded-xl border-2 bg-panel text-left transition-colors hover:bg-panel-2", q && (status?.queuedBar ? "animate-blink-fast" : "animate-pulse-soft"))}>
                     <div className="absolute inset-y-0 left-0" style={{ width: `${prog * 100}%`, background: color, opacity: cur ? 0.28 : 0.1 }} />
                     <div className="absolute inset-x-0 top-0 h-1" style={{ background: color, opacity: cur ? 1 : 0.5 }} />
                     <div className="relative px-2.5 pt-3">
-                      <div className={cn("truncate text-sm font-bold", !cur && "text-fg-2")} style={cur ? { color } : undefined}>{s.label}</div>
+                      <div className={cn("truncate text-lg font-bold", !cur && "text-fg-2")} style={cur ? { color } : undefined}>{s.label}</div>
                       <div className="tnum truncate text-[0.7rem] text-muted">{fmtTime(segOffset(segs, i))}</div>
                     </div>
-                    {q && <div className="absolute right-2 bottom-2 rounded bg-mon px-1.5 text-[0.62rem] font-black text-black">NEXT</div>}
+                    {i < 9 && <div className="absolute top-2.5 right-2 text-[0.65rem] font-bold text-faint">{i + 1}</div>}
+                    {q && <div className="absolute right-2 bottom-2 rounded bg-mon px-1.5 text-[0.62rem] font-black text-black">{status?.queuedBar ? "END OF BAR" : "END OF PART"}</div>}
                   </button>
                 );
               })}
@@ -277,7 +278,7 @@ function LiveView({ live }: { live: LiveInfo }) {
                 rolling ? "bg-white text-black" : "bg-accent text-accent-ink hover:bg-accent-2")}>
               {rolling ? <Pause className="size-10" fill="currentColor" /> : <Play className="size-10 translate-x-1" fill="currentColor" />}
             </button>
-            <LiveBtn label={`Fade out (${keyLabel(shortcuts.fadeOut)})`} onClick={() => fadeOut(4)} disabled={!rolling}><Volume1 className="size-6" /></LiveBtn>
+            <LiveBtn label={`Fade out (${keyLabel(shortcuts.fadeOut)})`} onClick={() => fadeOut()} disabled={!rolling}><Volume1 className="size-6" /></LiveBtn>
             <LiveBtn label={`Next song (${keyLabel(shortcuts.nextSong)})`} onClick={() => stepSong(1)} disabled={!next || rolling}><SkipForward className="size-6" fill="currentColor" /></LiveBtn>
           </div>
           <div className="mt-5 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-faint">

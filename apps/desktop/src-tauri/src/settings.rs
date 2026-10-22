@@ -25,6 +25,10 @@ pub struct AppSettings {
     /// en | id — dates and relative time in the UI
     #[serde(default = "default_ui_locale")]
     pub ui_locale: String,
+    /// Speak "Verse… 2… 3… 4" over the last bar before each section.
+    pub count_cue: bool,
+    /// Fade-out length in seconds (F key / Fade button).
+    pub fade_seconds: f32,
 }
 
 fn default_ui_locale() -> String {
@@ -77,6 +81,8 @@ impl Default for AppSettings {
             auto_advance: true,
             onboarding_done: false,
             ui_locale: "en".into(),
+            count_cue: true,
+            fade_seconds: 4.0,
         }
     }
 }

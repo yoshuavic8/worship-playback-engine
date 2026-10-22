@@ -167,7 +167,7 @@ export function install() {
       case "player_pause": st.state = "PAUSED"; return null;
       case "player_stop": case "player_panic": Object.assign(st, { state: cmd === "player_panic" ? "PANIC" : "STOPPED", position: 0, seg: 0, queued: null }); return null;
       case "player_seek": st.position = a.seconds; return null;
-      case "player_jump": if (a.immediate) { st.seg = a.index; st.position = loaded!.segments[a.index].start; } else st.queued = a.index; return null;
+      case "player_jump": if (a.immediate) { st.seg = a.index; st.position = loaded!.segments[a.index].start; } else { st.queued = a.index; } return null;
       case "player_cancel_jump": st.queued = null; return null;
       case "player_loop": st.looping = a.on; return null;
       case "live_open": { const sl = setlists.find((s) => s.id === a.setlistId)!; live = { setlist: sl, songs: sl.items.map((i) => songs.find((s) => s.id === i.songId)!), index: 0, state: "SONG_READY" }; load(sl.items[0].songId, "live", 0); return live; }

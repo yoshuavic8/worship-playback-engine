@@ -1,6 +1,6 @@
 import * as TooltipP from "@radix-ui/react-tooltip";
 import { Download, Loader2 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Toaster } from "sonner";
 import { MiniTransport } from "./components/Transport";
 import { Sidebar, Logo } from "./components/Sidebar";
@@ -28,6 +28,12 @@ export default function App() {
   const route = useApp((s) => s.route);
   const importing = useApp((s) => s.importing);
   useShortcuts();
+  // Splash stays at least 1.2 s so the version is readable on every launch.
+  const [splash, setSplash] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setSplash(false), 1200);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     if (!useApp.getState().ready) useApp.getState().init();
@@ -40,7 +46,7 @@ export default function App() {
     };
   }, []);
 
-  if (!ready) return <Boot error={bootError} />;
+  if (!ready || (splash && !bootError)) return <Boot error={bootError} />;
   if (!setupComplete) return <SetupWizard onDone={() => setSetupComplete(true)} />;
 
   const live = route.page === "live";
@@ -91,6 +97,10 @@ function Boot({ error }: { error: string | null }) {
     <div className="app-bg drag grid h-full place-items-center">
       <div className="flex flex-col items-center gap-5 text-center">
         <Logo size={64} />
+        <div>
+          <div className="text-xl font-semibold tracking-tight">Worship Playback Engine</div>
+          <div className="tnum mt-1 text-sm text-muted">Version {__APP_VERSION__}</div>
+        </div>
         {error ? (
           <div className="no-drag max-w-md">
             <div className="text-lg font-semibold">Could not start</div>

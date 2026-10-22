@@ -74,6 +74,7 @@ pub struct PlaybackStatus {
     pub duration: f64,
     pub segment_index: usize,
     pub queued_index: Option<usize>,
+    pub queued_bar: bool,
     pub looping: bool,
     pub count_in_remaining: f64,
     pub fading: bool,
@@ -437,6 +438,7 @@ impl Player {
             .unwrap_or(if preset_override { prep.cue } else { song.routing.cue_enabled });
         let has_sections = !song.sections.is_empty();
         let voice = ctx.settings.read().cue_voice.clone();
+        let count_cue = ctx.settings.read().count_cue;
         let cue_root = ctx.paths.read().cues();
         let mut missing_cues: Vec<String> = Vec::new();
         let segments: Vec<Segment> = plan
@@ -477,6 +479,19 @@ impl Player {
         }
 
         let bpb = song.beats_per_bar();
+        // Spoken "2", "3", … for the bar before each section (cached WAVs, rendered once).
+        let count_voices: Vec<_> = if count_cue && cue_enabled && grid.is_some() {
+            (2..=bpb.clamp(2, 12))
+                .filter_map(|n| {
+                    crate::cue::ensure_cue(&cue_root, voice.as_deref(), &n.to_string())
+                        .and_then(|p| self.get_buffer(&p, rate))
+                        .map_err(|e| logs::warn(cat::AUDIO, format!("count cue {n} failed: {e:#}")))
+                        .ok()
+                })
+                .collect()
+        } else {
+            vec![]
+        };
         let cue_lead_frames = match grid.as_ref() {
             Some(g) => (g.frames_per_beat * song.cue_lead_beats.max(1) as f64) as u64,
             None => rate as u64 * 2,
@@ -497,6 +512,8 @@ impl Player {
             cue_enabled,
             count_in_beats: song.count_in_bars * bpb,
             cue_lead_frames,
+            count_voices,
+            count_cue: count_cue && click_available,
         };
         let info = LoadedInfo {
             generation,
@@ -585,8 +602,8 @@ impl Player {
         ctx.engine.send(MixerCmd::Seek { frame: (seconds.max(0.0) * rate) as u64 });
     }
 
-    pub fn jump(&self, ctx: &Ctx, index: usize, immediate: bool) {
-        ctx.engine.send(MixerCmd::JumpToSegment { index, immediate });
+    pub fn jump(&self, ctx: &Ctx, index: usize, immediate: bool, bar: bool) {
+        ctx.engine.send(MixerCmd::JumpToSegment { index, immediate, bar });
     }
 
     pub fn cancel_jump(&self, ctx: &Ctx) {
@@ -717,6 +734,7 @@ impl Player {
             duration: i.loaded.as_ref().map(|l| l.duration).unwrap_or(0.0),
             segment_index: st.segment.load(Ordering::Relaxed) as usize,
             queued_index: if q >= 0 { Some(q as usize) } else { None },
+            queued_bar: st.queued_bar.load(Ordering::Relaxed),
             looping: st.looping.load(Ordering::Relaxed),
             count_in_remaining: st.preroll_remaining.load(Ordering::Relaxed) as f64 / rate,
             fading: st.fading.load(Ordering::Relaxed),

@@ -66,6 +66,11 @@ pub struct LoadedSong {
     pub cue_enabled: bool,
     pub count_in_beats: u32,
     pub cue_lead_frames: u64,
+    /// Spoken counts "2", "3", … used for the bar before a section ("Verse… 2… 3… 4").
+    /// Index 0 is "2". Empty disables counting.
+    pub count_voices: Vec<Arc<AudioBuffer>>,
+    /// Speak the section name on beat 1 and count the rest of the last bar before it.
+    pub count_cue: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +109,9 @@ pub enum MixerCmd {
     Panic,
     FadeOut { seconds: f32 },
     Seek { frame: u64 },
-    JumpToSegment { index: usize, immediate: bool },
+    /// `immediate`: now (only used while stopped). `bar`: at the next downbeat (end of the
+    /// current bar). Otherwise at the end of the current section. Never mid-bar while playing.
+    JumpToSegment { index: usize, immediate: bool, bar: bool },
     CancelJump,
     SetLoop(bool),
     SetTrack { role: TrackRole, gain: f32, muted: bool },
@@ -136,6 +143,8 @@ pub struct SharedStatus {
     pub position: AtomicU64,
     pub segment: AtomicU32,
     pub queued: AtomicI32,
+    /// The queued jump lands at the end of the bar (true) or end of the section (false).
+    pub queued_bar: AtomicBool,
     pub looping: AtomicBool,
     pub preroll_remaining: AtomicU64,
     pub ended_count: AtomicU64,
@@ -190,6 +199,9 @@ pub struct Mixer {
     pos: u64,
     cur_seg: usize,
     queued: Option<usize>,
+    /// Frame where a bar-quantized jump happens (a downbeat inside the current segment).
+    queued_at: Option<u64>,
+    queued_bar: bool,
     looping: bool,
     cue_fired: bool,
     /// Next beat index for fixed-tempo arithmetic mode.
@@ -209,6 +221,7 @@ pub struct Mixer {
     click_voices: ClickVoices,
     click_voice: Option<(bool, usize)>,
     cue_voice: Option<Voice>,
+    count_voice: Option<Voice>,
     test_voice: Option<(Voice, bool, bool)>,
     levels: MixLevels,
     bus: BusMap,
@@ -236,6 +249,8 @@ impl Mixer {
             pos: 0,
             cur_seg: 0,
             queued: None,
+            queued_at: None,
+            queued_bar: false,
             looping: false,
             cue_fired: false,
             next_beat: 0,
@@ -252,6 +267,7 @@ impl Mixer {
             click_voices,
             click_voice: None,
             cue_voice: None,
+            count_voice: None,
             test_voice: None,
             levels,
             bus,
@@ -329,14 +345,21 @@ impl Mixer {
             self.pos = 0;
             self.cur_seg = 0;
         }
-        self.queued = None;
+        self.clear_queue();
         self.cue_fired = false;
         self.sync_beat();
+    }
+
+    fn clear_queue(&mut self) {
+        self.queued = None;
+        self.queued_at = None;
+        self.queued_bar = false;
     }
 
     fn clear_voices(&mut self) {
         self.click_voice = None;
         self.cue_voice = None;
+        self.count_voice = None;
         self.test_voice = None;
     }
 
@@ -437,24 +460,38 @@ impl Mixer {
                 self.cue_voice = None;
                 self.sync_beat();
             }
-            MixerCmd::JumpToSegment { index, immediate } => {
+            MixerCmd::JumpToSegment { index, immediate, bar } => {
                 let Some(song) = &self.song else { return };
                 if index >= song.segments.len() {
                     return;
                 }
-                if immediate || !matches!(self.transport, Transport::Playing | Transport::CountIn) {
+                let rolling = matches!(self.transport, Transport::Playing | Transport::CountIn);
+                if !rolling {
+                    // Stopped / paused: move the playhead right away.
+                    let start = song.segments[index].start;
                     self.cur_seg = index;
-                    self.pos = song.segments[index].start;
-                    self.queued = None;
+                    self.pos = start;
+                    self.clear_queue();
                     self.cue_voice = None;
+                    self.count_voice = None;
                     self.sync_beat();
                 } else {
+                    // While rolling a jump is always quantized: end of bar or end of section.
+                    let _ = immediate;
+                    let seg_end = song.segments.get(self.cur_seg).map(|s| s.end).unwrap_or(u64::MAX);
+                    let at = if bar {
+                        song.grid.as_ref().and_then(|g| next_downbeat_after(g, self.pos)).filter(|f| *f < seg_end)
+                    } else {
+                        None
+                    };
                     self.queued = Some(index);
+                    self.queued_at = at;
+                    self.queued_bar = bar;
                 }
                 self.cue_fired = false;
             }
             MixerCmd::CancelJump => {
-                self.queued = None;
+                self.clear_queue();
                 self.cue_fired = false;
             }
             MixerCmd::SetLoop(v) => {
@@ -530,6 +567,7 @@ impl Mixer {
         s.position.store(self.pos, Ordering::Relaxed);
         s.segment.store(self.cur_seg as u32, Ordering::Relaxed);
         s.queued.store(self.queued.map(|q| q as i32).unwrap_or(-1), Ordering::Relaxed);
+        s.queued_bar.store(self.queued.is_some() && self.queued_bar, Ordering::Relaxed);
         s.looping.store(self.looping, Ordering::Relaxed);
         let rem = if self.transport == Transport::CountIn {
             self.preroll_total.saturating_sub(self.preroll_pos)
@@ -637,8 +675,13 @@ impl Mixer {
                     Transport::Playing => {
                         // Segment boundary: follow the arrangement plan.
                         if let Some(seg) = song.segments.get(self.cur_seg) {
-                            if self.pos >= seg.end || self.pos >= song.frames {
-                                let next = if self.looping {
+                            let bar_jump = self.queued.is_some() && self.queued_at.is_some_and(|a| self.pos >= a);
+                            if bar_jump || self.pos >= seg.end || self.pos >= song.frames {
+                                self.queued_at = None;
+                                self.queued_bar = false;
+                                let next = if bar_jump {
+                                    self.queued.take()
+                                } else if self.looping {
                                     Some(self.cur_seg)
                                 } else if let Some(q) = self.queued.take() {
                                     Some(q)
@@ -673,7 +716,7 @@ impl Mixer {
                         }
                         if self.transport == Transport::Playing {
                             // Cue for the upcoming segment.
-                            if song.cue_enabled && !self.cue_fired {
+                            if song.cue_enabled && !self.cue_fired && !(song.count_cue && song.grid.is_some()) {
                                 let seg = &song.segments[self.cur_seg];
                                 let next = if self.looping {
                                     Some(self.cur_seg)
@@ -698,6 +741,7 @@ impl Mixer {
                             // Click on the beat grid (song time, so it survives arrangement jumps).
                             // Explicit beats mode is preferred for live recordings (follows music);
                             // fixed formula is used for studio recordings.
+                            let mut beat_hit: Option<u64> = None;
                             if let Some(g) = &song.grid {
                                 if g.has_explicit_beats() {
                                     // Walk forward through explicit beats table.
@@ -707,6 +751,7 @@ impl Mixer {
                                             if song.click_enabled {
                                                 click_trigger = Some(entry.is_accent);
                                             }
+                                            beat_hit = Some(entry.frame);
                                             self.next_explicit_beat += 1;
                                         } else {
                                             break;
@@ -719,7 +764,41 @@ impl Mixer {
                                         if song.click_enabled {
                                             click_trigger = Some(g.is_accent_fixed(self.next_beat));
                                         }
+                                        beat_hit = Some(bf.round().max(0.0) as u64);
                                         self.next_beat += 1;
+                                    }
+                                }
+                            }
+                            // Spoken count for the last bar before the next section:
+                            // beat 1 says the section name, the other beats say "2", "3", "4".
+                            if let (Some(bfr), Some(g)) = (beat_hit, song.grid.as_ref()) {
+                                if song.cue_enabled && song.count_cue {
+                                    let seg_end = song.segments[self.cur_seg].end;
+                                    let boundary = self.queued_at.unwrap_or(seg_end);
+                                    let next = if self.queued_at.is_some() {
+                                        self.queued
+                                    } else if self.looping {
+                                        Some(self.cur_seg)
+                                    } else {
+                                        self.queued.or(if self.cur_seg + 1 < song.segments.len() {
+                                            Some(self.cur_seg + 1)
+                                        } else {
+                                            None
+                                        })
+                                    };
+                                    if let Some(n) = next {
+                                        let k = beats_until(g, bfr, boundary);
+                                        let bpb = g.beats_per_bar.max(1) as i64;
+                                        if k >= 1 && k <= bpb {
+                                            let num = bpb - k + 1;
+                                            if num == 1 {
+                                                if let Some(c) = song.segments[n].cue.clone() {
+                                                    self.cue_voice = Some(Voice { buf: c, pos: 0 });
+                                                }
+                                            } else if let Some(c) = song.count_voices.get((num - 2) as usize) {
+                                                self.count_voice = Some(Voice { buf: c.clone(), pos: 0 });
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -772,6 +851,16 @@ impl Mixer {
                     self.cue_voice = None;
                 }
             }
+            if let Some(cv) = self.count_voice.as_mut() {
+                if cv.pos < cv.buf.frames() {
+                    let (l, r) = cv.buf.frame(cv.pos);
+                    ml += l * lv.cue;
+                    mr += r * lv.cue;
+                    cv.pos += 1;
+                } else {
+                    self.count_voice = None;
+                }
+            }
             if let Some((tv, to_foh, to_mon)) = self.test_voice.as_mut() {
                 if tv.pos < tv.buf.frames() {
                     let (l, r) = tv.buf.frame(tv.pos);
@@ -792,13 +881,14 @@ impl Mixer {
             // Fade out (applies to everything).
             let mut g = 1.0;
             if self.fade_total > 0 {
-                g = 1.0 - self.fade_pos as f32 / self.fade_total as f32;
+                g = fade_gain(self.fade_pos as f32 / self.fade_total as f32);
                 self.fade_pos += 1;
                 if self.fade_pos >= self.fade_total {
                     self.fade_total = 0;
                     self.transport = Transport::Paused;
                     self.click_voice = None;
                     self.cue_voice = None;
+                    self.count_voice = None;
                 }
             }
             if self.transport == Transport::Panic {
@@ -835,6 +925,50 @@ impl Mixer {
     }
 }
 
+/// Smooth fade curve (cosine, 1 → 0). Sounds even to the ear and lands without a click.
+pub fn fade_gain(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    0.5 * (1.0 + (std::f32::consts::PI * t).cos())
+}
+
+/// First downbeat (beat 1 of a bar) strictly after `pos`.
+pub fn next_downbeat_after(g: &BeatGrid, pos: u64) -> Option<u64> {
+    let bpb = g.beats_per_bar.max(1) as i64;
+    if g.has_explicit_beats() {
+        let i = g.explicit_beat_at_or_after(pos + 1);
+        g.explicit_beats[i.min(g.explicit_beats.len())..]
+            .iter()
+            .find(|b| (b.q as i64).rem_euclid(bpb) == 0)
+            .map(|b| b.frame)
+    } else {
+        let mut k = g.beat_at_or_after(pos + 1);
+        while k.rem_euclid(bpb) != 0 {
+            k += 1;
+        }
+        let f = g.beat_frame(k).round();
+        if f <= pos as f64 {
+            None
+        } else {
+            Some(f as u64)
+        }
+    }
+}
+
+/// Beats from the beat at `from` up to (not including) `to`.
+fn beats_until(g: &BeatGrid, from: u64, to: u64) -> i64 {
+    if to <= from {
+        return 0;
+    }
+    if g.has_explicit_beats() {
+        let a = g.explicit_beat_at_or_after(from) as i64;
+        let b = g.explicit_beat_at_or_after(to.saturating_sub(g.frames_per_beat as u64 / 4)) as i64;
+        // Beats in [from, to). The quarter-beat back-off keeps a beat sitting on `to` out.
+        (b - a).max(0)
+    } else {
+        ((to - from) as f64 / g.frames_per_beat.max(1.0)).round() as i64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,6 +999,8 @@ mod tests {
             cue_enabled: true,
             count_in_beats: 4,
             cue_lead_frames: SR as u64,
+            count_voices: vec![],
+            count_cue: false,
         })
     }
 
@@ -975,7 +1111,7 @@ mod tests {
         s.grid = None;
         tx.send(MixerCmd::Load(s)).unwrap();
         tx.send(MixerCmd::Play { count_in: false }).unwrap();
-        tx.send(MixerCmd::JumpToSegment { index: 2, immediate: false }).unwrap();
+        tx.send(MixerCmd::JumpToSegment { index: 2, immediate: false, bar: false }).unwrap();
         let mut buf = vec![0f32; 2 * 1200];
         m.render(&mut buf, 2);
         assert_eq!(status.segment.load(Ordering::Relaxed), 2);
@@ -1000,6 +1136,64 @@ mod tests {
         run(&mut m, SR as usize * 2, 2);
         assert_eq!(status.transport.load(Ordering::Relaxed), transport::PLAYING);
         assert!(status.position.load(Ordering::Relaxed) > 0);
+    }
+
+    /// Double-click jump: lands on the next downbeat, never mid-bar.
+    #[test]
+    fn bar_jump_waits_for_downbeat() {
+        let bus = BusMap { foh: OutputTarget::Stereo { left: 0, right: 1 }, monitor: OutputTarget::None };
+        let (mut m, tx, status) = setup(bus);
+        let b = Arc::new(AudioBuffer::silent(SR as usize * 20, SR));
+        // 120 BPM 4/4: a bar is 2 s = 96000 frames.
+        let s = song(b, vec![(0, SR as u64 * 10), (SR as u64 * 10, SR as u64 * 20)], None);
+        tx.send(MixerCmd::Load(s)).unwrap();
+        tx.send(MixerCmd::Play { count_in: false }).unwrap();
+        run(&mut m, SR as usize / 2, 2); // ~0.5 s in, mid-bar
+        tx.send(MixerCmd::JumpToSegment { index: 1, immediate: false, bar: true }).unwrap();
+        let mut buf = vec![0f32; 2 * 512];
+        m.render(&mut buf, 2);
+        assert!(status.queued_bar.load(Ordering::Relaxed));
+        assert_eq!(status.segment.load(Ordering::Relaxed), 0);
+        // just before the bar line (frame 96000) still in segment 0
+        let p = status.position.load(Ordering::Relaxed) as usize;
+        let mut buf = vec![0f32; 2 * (SR as usize * 2 - p - 10)];
+        m.render(&mut buf, 2);
+        assert_eq!(status.segment.load(Ordering::Relaxed), 0);
+        let mut buf = vec![0f32; 2 * 20];
+        m.render(&mut buf, 2);
+        assert_eq!(status.segment.load(Ordering::Relaxed), 1);
+        let pos = status.position.load(Ordering::Relaxed);
+        assert!((SR as u64 * 10..SR as u64 * 10 + 20).contains(&pos), "landed at {pos}");
+    }
+
+    #[test]
+    fn next_downbeat_is_strictly_after() {
+        let g = BeatGrid::new(120.0, 0.0, 4, SR).unwrap();
+        assert_eq!(next_downbeat_after(&g, 0), Some(96000));
+        assert_eq!(next_downbeat_after(&g, 95999), Some(96000));
+        assert_eq!(next_downbeat_after(&g, 96000), Some(192000));
+        assert!(fade_gain(0.0) > 0.999 && fade_gain(1.0) < 1e-6);
+    }
+
+    /// The bar before the next section speaks: name on 1, then 2, 3, 4.
+    #[test]
+    fn count_cue_speaks_last_bar() {
+        let bus = BusMap { foh: OutputTarget::None, monitor: OutputTarget::Stereo { left: 0, right: 1 } };
+        let (mut m, tx, _) = setup(bus);
+        let b = Arc::new(AudioBuffer::silent(SR as usize * 8, SR));
+        let name = Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR));
+        let mut s = song(b, vec![(0, SR as u64 * 4), (SR as u64 * 4, SR as u64 * 8)], Some(name));
+        s.click_enabled = false;
+        s.count_cue = true;
+        s.count_voices = (0..3).map(|_| Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR))).collect();
+        tx.send(MixerCmd::Load(s)).unwrap();
+        tx.send(MixerCmd::Play { count_in: false }).unwrap();
+        let out = run(&mut m, SR as usize * 4, 2);
+        // first bar (0..2 s) silent, second bar (2..4 s) has 4 spoken cues.
+        let first: f32 = out[..SR as usize * 2 * 2].iter().map(|x| x * x).sum();
+        let second: f32 = out[SR as usize * 2 * 2..SR as usize * 4 * 2].iter().map(|x| x * x).sum();
+        assert_eq!(first, 0.0);
+        assert!(second > 100.0, "energy {second}");
     }
 
     /// Count-in is whole bars of click, then the song enters on beat 1.

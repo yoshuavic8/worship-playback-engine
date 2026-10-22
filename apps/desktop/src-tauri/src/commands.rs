@@ -791,8 +791,8 @@ pub fn player_seek(ctx: S, seconds: f64) {
     ctx.player.seek(&ctx, seconds)
 }
 #[tauri::command]
-pub fn player_jump(ctx: S, index: usize, immediate: bool) {
-    ctx.player.jump(&ctx, index, immediate)
+pub fn player_jump(ctx: S, index: usize, immediate: bool, bar: Option<bool>) {
+    ctx.player.jump(&ctx, index, immediate, bar.unwrap_or(false))
 }
 #[tauri::command]
 pub fn player_cancel_jump(ctx: S) {

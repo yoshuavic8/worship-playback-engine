@@ -189,6 +189,10 @@ export interface AppSettings {
   onboardingDone: boolean;
   /** Display language for dates and a few UI strings (full UI remains English). */
   uiLocale: "en" | "id";
+  /** Speak "Verse… 2… 3… 4" over the last bar before each section. */
+  countCue?: boolean;
+  /** Fade-out length in seconds. */
+  fadeSeconds?: number;
 }
 
 export interface SetupStep {
@@ -305,6 +309,8 @@ export interface PlaybackStatus {
   duration: number;
   segmentIndex: number;
   queuedIndex: number | null;
+  /** Queued jump lands at the end of the bar (true) or the end of the section (false). */
+  queuedBar?: boolean;
   looping: boolean;
   countInRemaining: number;
   fading: boolean;

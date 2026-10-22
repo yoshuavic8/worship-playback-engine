@@ -58,7 +58,7 @@ export const ipc = {
   panic: () => call<void>("player_panic"),
   fade: (seconds: number) => call<void>("player_fade", { seconds }),
   seek: (seconds: number) => call<void>("player_seek", { seconds }),
-  jump: (index: number, immediate: boolean) => call<void>("player_jump", { index, immediate }),
+  jump: (index: number, immediate: boolean, bar = false) => call<void>("player_jump", { index, immediate, bar }),
   cancelJump: () => call<void>("player_cancel_jump"),
   loop: (on: boolean) => call<void>("player_loop", { on }),
   setTrack: (role: T.TrackRole, gainDb: number, muted: boolean) => call<void>("player_set_track", { role, gainDb, muted }),

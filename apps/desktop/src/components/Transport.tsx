@@ -59,7 +59,7 @@ export function MiniTransport() {
           {rolling ? <Pause className="size-5" fill="currentColor" /> : <Play className="size-5 translate-x-px" fill="currentColor" />}
         </IconButton>
         <IconButton label="Stop (S)" onClick={stop} disabled={!loaded}><Square className="size-4" fill="currentColor" /></IconButton>
-        <IconButton label="Fade out (F)" onClick={() => fadeOut(4)} disabled={!rolling}><Volume1 className="size-4" /></IconButton>
+        <IconButton label="Fade out (F)" onClick={() => fadeOut()} disabled={!rolling}><Volume1 className="size-4" /></IconButton>
       </div>
 
       <div className="min-w-0 flex-1">

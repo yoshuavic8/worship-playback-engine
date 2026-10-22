@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useApp } from "@/store/app";
 import { DEFAULT_SHORTCUTS, isTyping, matchShortcut } from "./shortcuts";
-import { ACTIONS, panicStop } from "./transport";
+import { ACTIONS, jumpTo, panicStop } from "./transport";
 
 /** Global transport shortcuts. PANIC always works, even while typing. */
 export function useShortcuts() {
@@ -22,7 +22,19 @@ export function useShortcuts() {
         return;
       }
       if (isTyping(e) || document.querySelector("[role=dialog]")) return;
-      if (!action) return;
+      if (!action) {
+        // Keys 1–9 jump to that section (same rule as tapping: once = end of part, twice = end of bar).
+        const m = /^Digit([1-9])$/.exec(e.code);
+        const segs = useApp.getState().loaded?.segments;
+        if (m && segs && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          const i = Number(m[1]) - 1;
+          if (i < segs.length) {
+            e.preventDefault();
+            jumpTo(i);
+          }
+        }
+        return;
+      }
       const fn = ACTIONS[action];
       if (fn) {
         e.preventDefault();

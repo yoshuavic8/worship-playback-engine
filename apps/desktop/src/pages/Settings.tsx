@@ -97,6 +97,13 @@ export function Settings() {
               <Row label="Auto-advance in live mode" hint="Load the next song when one ends. “Auto” transitions also start it.">
                 <Switch checked={settings.autoAdvance} onChange={(autoAdvance) => save({ autoAdvance })} />
               </Row>
+              <Row label="Count cue" hint="Speaks the next section on beat 1 of the last bar, then counts: “Verse… 2… 3… 4”. Monitor only.">
+                <Switch checked={settings.countCue ?? true} onChange={(countCue) => save({ countCue })} />
+              </Row>
+              <Row label="Fade-out length" hint="Fade button / F key: smooth fade, then the song stops">
+                <Segmented<number> size="sm" value={settings.fadeSeconds ?? 4} onChange={(fadeSeconds) => save({ fadeSeconds })}
+                  options={[2, 4, 6, 8, 12].map((v) => ({ value: v, label: `${v}s` }))} />
+              </Row>
               <Row label="Cue voice" hint="macOS voice used for spoken cues (“Verse”, “Chorus”…). Pre-rendered, works offline.">
                 <select className="field h-8 w-52" value={settings.cueVoice ?? ""} onChange={(e) => save({ cueVoice: e.target.value || null })}>
                   <option value="">System default</option>
