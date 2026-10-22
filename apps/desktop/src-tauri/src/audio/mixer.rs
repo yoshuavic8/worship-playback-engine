@@ -769,8 +769,8 @@ impl Mixer {
                                     }
                                 }
                             }
-                            // Spoken count for the last bar before the next section:
-                            // beat 1 says the section name, the other beats say "2", "3", "4".
+                            // Spoken cue: section name on beat 1 two bars before the switch,
+                            // then "1", "2", "3", "4" on every beat of the last bar.
                             if let (Some(bfr), Some(g)) = (beat_hit, song.grid.as_ref()) {
                                 if song.cue_enabled && song.count_cue {
                                     let seg_end = song.segments[self.cur_seg].end;
@@ -789,13 +789,23 @@ impl Mixer {
                                     if let Some(n) = next {
                                         let k = beats_until(g, bfr, boundary);
                                         let bpb = g.beats_per_bar.max(1) as i64;
-                                        if k >= 1 && k <= bpb {
+                                        // End-of-part: | name (whole bar) | 1 2 3 4 | -> next section.
+                                        // End-of-bar jump, or not enough lead for the name bar:
+                                        // compressed | name 2 3 4 | in the last bar.
+                                        let compressed = self.queued_at.is_some() || !self.cue_fired;
+                                        if !self.queued_at.is_some() && k == 2 * bpb {
+                                            if let Some(c) = song.segments[n].cue.clone() {
+                                                self.cue_voice = Some(Voice { buf: c, pos: 0 });
+                                            }
+                                            self.cue_fired = true;
+                                        } else if k >= 1 && k <= bpb {
                                             let num = bpb - k + 1;
-                                            if num == 1 {
+                                            if compressed && num == 1 {
                                                 if let Some(c) = song.segments[n].cue.clone() {
                                                     self.cue_voice = Some(Voice { buf: c, pos: 0 });
                                                 }
-                                            } else if let Some(c) = song.count_voices.get((num - 2) as usize) {
+                                                self.cue_fired = true;
+                                            } else if let Some(c) = song.count_voices.get((num - 1) as usize) {
                                                 self.count_voice = Some(Voice { buf: c.clone(), pos: 0 });
                                             }
                                         }
@@ -1175,25 +1185,56 @@ mod tests {
         assert!(fade_gain(0.0) > 0.999 && fade_gain(1.0) < 1e-6);
     }
 
-    /// The bar before the next section speaks: name on 1, then 2, 3, 4.
+    /// Two bars before the switch: name on 1 (rest of bar silent), then 1 2 3 4.
     #[test]
-    fn count_cue_speaks_last_bar() {
+    fn count_cue_name_two_bars_then_count() {
         let bus = BusMap { foh: OutputTarget::None, monitor: OutputTarget::Stereo { left: 0, right: 1 } };
         let (mut m, tx, _) = setup(bus);
-        let b = Arc::new(AudioBuffer::silent(SR as usize * 8, SR));
+        let b = Arc::new(AudioBuffer::silent(SR as usize * 12, SR));
         let name = Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR));
-        let mut s = song(b, vec![(0, SR as u64 * 4), (SR as u64 * 4, SR as u64 * 8)], Some(name));
+        let mut s = song(b, vec![(0, SR as u64 * 6), (SR as u64 * 6, SR as u64 * 12)], Some(name));
         s.click_enabled = false;
         s.count_cue = true;
-        s.count_voices = (0..3).map(|_| Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR))).collect();
+        s.count_voices = (0..4).map(|_| Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR))).collect();
         tx.send(MixerCmd::Load(s)).unwrap();
         tx.send(MixerCmd::Play { count_in: false }).unwrap();
-        let out = run(&mut m, SR as usize * 4, 2);
-        // first bar (0..2 s) silent, second bar (2..4 s) has 4 spoken cues.
-        let first: f32 = out[..SR as usize * 2 * 2].iter().map(|x| x * x).sum();
-        let second: f32 = out[SR as usize * 2 * 2..SR as usize * 4 * 2].iter().map(|x| x * x).sum();
-        assert_eq!(first, 0.0);
-        assert!(second > 100.0, "energy {second}");
+        let out = run(&mut m, SR as usize * 6, 2);
+        let e = |a: f64, b: f64| -> f32 {
+            out[(a * SR as f64) as usize * 2..(b * SR as f64) as usize * 2].iter().map(|x| x * x).sum()
+        };
+        // bars are 2 s (120 BPM, 4/4). Bar 0..2 silent; bar 2..4 = name on beat 1 only;
+        // bar 4..6 = a count on every beat.
+        assert_eq!(e(0.0, 2.0), 0.0);
+        assert!(e(2.0, 2.5) > 100.0);
+        assert_eq!(e(2.5, 4.0), 0.0, "name bar must have no count");
+        for k in 0..4 {
+            let a = 4.0 + k as f64 * 0.5;
+            assert!(e(a, a + 0.5) > 100.0, "beat {k} of last bar silent");
+        }
+    }
+
+    /// Bar-quantized jump keeps the old compressed cue: name on 1, then 2 3 4.
+    #[test]
+    fn bar_jump_uses_compressed_cue() {
+        let bus = BusMap { foh: OutputTarget::None, monitor: OutputTarget::Stereo { left: 0, right: 1 } };
+        let (mut m, tx, status) = setup(bus);
+        let b = Arc::new(AudioBuffer::silent(SR as usize * 20, SR));
+        let name = Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR));
+        let mut s = song(b, vec![(0, SR as u64 * 16), (SR as u64 * 16, SR as u64 * 20)], Some(name));
+        s.click_enabled = false;
+        s.count_cue = true;
+        s.count_voices = (0..4).map(|_| Arc::new(AudioBuffer::from_mono(&vec![0.5; 4800], SR))).collect();
+        tx.send(MixerCmd::Load(s)).unwrap();
+        tx.send(MixerCmd::Play { count_in: false }).unwrap();
+        tx.send(MixerCmd::JumpToSegment { index: 1, immediate: false, bar: true }).unwrap();
+        let out = run(&mut m, SR as usize * 2, 2);
+        for k in 0..4 {
+            let a = (k as f64 * 0.5 * SR as f64) as usize * 2;
+            let e: f32 = out[a..a + SR as usize / 2 * 2].iter().map(|x| x * x).sum();
+            assert!(e > 100.0, "beat {k} silent");
+        }
+        run(&mut m, 1024, 2);
+        assert_eq!(status.segment.load(Ordering::Relaxed), 1);
     }
 
     /// Count-in is whole bars of click, then the song enters on beat 1.

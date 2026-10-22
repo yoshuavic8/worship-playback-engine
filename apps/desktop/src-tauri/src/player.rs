@@ -481,7 +481,7 @@ impl Player {
         let bpb = song.beats_per_bar();
         // Spoken "2", "3", … for the bar before each section (cached WAVs, rendered once).
         let count_voices: Vec<_> = if count_cue && cue_enabled && grid.is_some() {
-            (2..=bpb.clamp(2, 12))
+            (1..=bpb.clamp(1, 12))
                 .filter_map(|n| {
                     crate::cue::ensure_cue(&cue_root, voice.as_deref(), &n.to_string())
                         .and_then(|p| self.get_buffer(&p, rate))
