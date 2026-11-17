@@ -1,17 +1,23 @@
 import { listen } from "@tauri-apps/api/event";
-import { Loader2, Pause, Play, Sparkles } from "lucide-react";
+import { ClipboardCopy, FileText, Loader2, Pause, Play, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Logo } from "@/components/Sidebar";
 import { Button, Progress } from "@/components/ui";
 import { fmtBytes } from "@/lib/format";
 import { errMsg, ipc, isTauri } from "@/lib/ipc";
-import type { SetupStatus } from "@/lib/types";
+import type { LogEntry, SetupStatus } from "@/lib/types";
 
 export function SetupWizard({ onDone }: { onDone: () => void }) {
   const [st, setSt] = useState<SetupStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
 
   const refresh = useCallback(() => ipc.setupStatus().then(setSt).catch((e) => setErr(errMsg(e))), []);
+  const loadLogs = useCallback(() => ipc.logs(300, null).then((entries) => {
+    setLogs(entries);
+    return entries;
+  }), []);
 
   useEffect(() => {
     refresh();
@@ -28,6 +34,13 @@ export function SetupWizard({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     if (st?.complete) onDone();
   }, [st?.complete, onDone]);
+
+  useEffect(() => {
+    if (st?.phase === "error") {
+      setShowLogs(true);
+      loadLogs().catch((e) => setErr(errMsg(e)));
+    }
+  }, [st?.phase, loadLogs]);
 
   useEffect(() => {
     if (isTauri()) ipc.runSetup().catch((e) => setErr(errMsg(e)));
@@ -53,6 +66,11 @@ export function SetupWizard({ onDone }: { onDone: () => void }) {
             <span className="tnum text-muted">{st ? `${Math.round(st.progress * 100)}%` : "…"}</span>
           </div>
           <Progress value={st?.progress ?? 0} className="mt-3" indeterminate={!st} />
+          {st?.phase === "error" && (
+            <div className="mt-3 rounded-lg border border-err/30 bg-err/5 p-3 text-sm text-err">
+              Setup gagal. Periksa log di bawah untuk detail penyebabnya.
+            </div>
+          )}
           {totalBytes > 0 && (
             <div className="mt-2 text-xs text-muted">Perkiraan unduhan: {fmtBytes(totalBytes)}</div>
           )}
@@ -74,6 +92,36 @@ export function SetupWizard({ onDone }: { onDone: () => void }) {
           </ul>
 
           {err && <p className="mt-3 text-xs text-err">{err}</p>}
+
+          <div className="mt-4">
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="ghost" icon={<FileText className="size-3.5" />} onClick={() => {
+                const next = !showLogs;
+                setShowLogs(next);
+                if (next) loadLogs().catch((e) => setErr(errMsg(e)));
+              }}>
+                {showLogs ? "Sembunyikan log" : "Lihat log"}
+              </Button>
+              <Button size="sm" variant="ghost" icon={<ClipboardCopy className="size-3.5" />} onClick={() => {
+                loadLogs()
+                  .then((entries) => navigator.clipboard.writeText(entries.map((l) => `${l.time} [${l.level}] ${l.category}: ${l.message}`).join("\n")))
+                  .catch((e) => setErr(errMsg(e)));
+              }}>
+                Salin log
+              </Button>
+            </div>
+            {showLogs && (
+              <div className="mt-2 max-h-64 overflow-auto rounded-lg bg-[#0a0b0d] p-3 font-mono text-[0.7rem] leading-relaxed select-text">
+                {logs.length === 0 ? <div className="text-faint">Belum ada log.</div> : logs.map((l, i) => (
+                  <div key={i} className="break-words text-fg-2">
+                    <span className="text-faint">{l.time.slice(11, 19)} </span>
+                    <span className={l.level === "error" ? "text-err" : l.level === "warn" ? "text-warn" : "text-muted"}>{l.level} </span>
+                    <span className="text-mon/80">{l.category}: </span>{l.message}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div className="mt-5 flex flex-wrap gap-2">
             {st?.paused ? (

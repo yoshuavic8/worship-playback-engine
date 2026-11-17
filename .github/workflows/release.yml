@@ -4,7 +4,7 @@
 #
 # Trigger:
 #   - Actions → Release → Run workflow  → download the artifact
-#   - git tag v0.1.0 && git push origin v0.1.0  → GitHub Release with the .dmg
+#   - git tag v0.2.1 && git push origin v0.2.1  → GitHub Release with the .dmg
 
 name: Release
 
@@ -78,9 +78,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist-artifacts/*.dmg
-          generate_release_notes: true
           body: |
-            macOS 12+ universal (Apple Silicon + Intel). Unsigned open-source build.
+            ## Changes from v0.2.0 to v0.2.1
+
+            - Fixed first-run Python setup by bundling the audio worker README required by Hatchling.
+            - Setup now opens its logs when installation fails and provides view/copy controls.
+            - Captured `uv` installer output and improved setup failure details.
+
+            macOS 12+ universal (Apple Silicon + Intel). Ad-hoc signed, not Apple-notarized.
 
             1. Open the `.dmg` and drag the app to Applications.
             2. Right-click the app → **Open** → **Open**.

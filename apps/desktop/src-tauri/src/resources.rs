@@ -463,10 +463,16 @@ fn run_uv_python_and_sync(ctx: &Ctx, uv: &Path, emit: &dyn Fn(&str, bool, Option
     py.args(["python", "install", "3.12"])
         .env("UV_PYTHON_INSTALL_DIR", &install_dir)
         .env("UV_NO_PROGRESS", "1");
-    let st = py.status().context("uv python install")?;
-    if !st.success() {
-        return Err(anyhow!("uv python install failed"));
+    let output = py.output().context("Could not start uv python install")?;
+    let python_output = log_uv_output("python install", &output);
+    if !output.status.success() {
+        return Err(anyhow!(
+            "uv python install failed ({}).{}",
+            output.status,
+            failure_output(&python_output)
+        ));
     }
+
     emit("Menginstal paket audio (uv sync)…", false, None);
     let mut child = Command::new(uv)
         .args(["sync", "--frozen", "--no-dev", "--python", "3.12"])
@@ -474,25 +480,26 @@ fn run_uv_python_and_sync(ctx: &Ctx, uv: &Path, emit: &dyn Fn(&str, bool, Option
         .env("UV_PYTHON_INSTALL_DIR", &install_dir)
         .env("UV_PROJECT_ENVIRONMENT", paths.python_env())
         .env("UV_NO_PROGRESS", "1")
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .context("Could not start uv sync")?;
     let mut stderr_log = String::new();
-    if let Some(err) = child.stderr.take() {
-        for line in BufReader::new(err).lines().map_while(Result::ok) {
-            let l = line.trim();
-            if !l.is_empty() {
-                stderr_log.push_str(l);
+    if let Some(stderr) = child.stderr.take() {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let line = line.trim();
+            if !line.is_empty() {
+                stderr_log.push_str(line);
                 stderr_log.push('\n');
-                logs::info(cat::SYSTEM, format!("uv: {l}"));
-                emit(l, false, None);
+                logs::info(cat::SYSTEM, format!("uv sync stderr: {line}"));
+                emit(line, false, None);
             }
         }
     }
-    let st = child.wait()?;
-    if !st.success() {
+    let status = child.wait().context("Waiting for uv sync")?;
+    if !status.success() {
         let msg = if stderr_log.trim().is_empty() {
-            "uv sync failed. See Diagnostics → Logs.".into()
+            format!("uv sync failed ({status}). See Setup logs for details.")
         } else {
             crate::compat::humanize_uv_sync_error(&stderr_log)
         };
@@ -501,9 +508,59 @@ fn run_uv_python_and_sync(ctx: &Ctx, uv: &Path, emit: &dyn Fn(&str, bool, Option
     Ok(())
 }
 
+fn log_uv_output(stage: &str, output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        logs::info(cat::SYSTEM, format!("uv {stage} stdout: {line}"));
+    }
+    for line in stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        logs::info(cat::SYSTEM, format!("uv {stage} stderr: {line}"));
+    }
+    if stderr.trim().is_empty() {
+        stdout.into_owned()
+    } else {
+        stderr.into_owned()
+    }
+}
+
+fn failure_output(output: &str) -> String {
+    let lines: Vec<_> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let details = lines
+        .iter()
+        .rev()
+        .take(8)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\n{}", details.chars().take(1200).collect::<String>())
+}
+
 /// Synchronous engine install (used by setup wizard).
 pub fn install_python_env_sync(ctx: Arc<Ctx>) -> Result<()> {
-    let uv = find_tool("uv").ok_or_else(|| anyhow!("Bundled uv sidecar not found. Reinstall the app."))?;
+    let uv = find_tool("uv").ok_or_else(|| {
+        let message = "Bundled uv sidecar not found. Reinstall the app.";
+        logs::error(cat::SYSTEM, message);
+        anyhow!(message)
+    })?;
     if ENV_BUSY.swap(true, Ordering::SeqCst) {
         return Err(anyhow!("The Python environment is already being installed"));
     }
@@ -517,6 +574,10 @@ pub fn install_python_env_sync(ctx: Arc<Ctx>) -> Result<()> {
     match result {
         Ok(()) => emit("Python environment ready", true, None),
         Err(e) => {
+            logs::error(
+                cat::SYSTEM,
+                format!("Python environment installation failed: {e:#}"),
+            );
             emit(&format!("{e:#}"), true, Some(format!("{e:#}")));
             ENV_BUSY.store(false, Ordering::SeqCst);
             return Err(e);

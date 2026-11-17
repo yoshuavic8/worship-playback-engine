@@ -302,15 +302,15 @@ pub fn ollama_pull_hint(info: &CompatInfo, installed: &[String]) -> Option<Strin
 pub fn humanize_uv_sync_error(stderr: &str) -> String {
     let s = stderr.to_lowercase();
     if s.contains("onnxruntime") || s.contains("1.24") {
-        return "This Mac needs onnxruntime below 1.24 (Intel and macOS 12–13). Re-install the Python environment from Diagnostics.".into();
+        return "This Mac needs onnxruntime below 1.24 (Intel and macOS 12–13). Retry Setup after reviewing its logs.".into();
     }
     if s.contains("torch") && s.contains("x86_64") {
-        return "Intel Macs use PyTorch 2.2.2 (last release with an x86_64 wheel). Re-run Install environment in Diagnostics.".into();
+        return "Intel Macs use PyTorch 2.2.2 (last release with an x86_64 wheel). Retry Setup after reviewing its logs.".into();
     }
     if s.contains("no solution") || s.contains("platform") {
-        return "The locked Python environment does not match this Mac (arm64 vs Intel). Update the app and install the environment again.".into();
+        return "The locked Python environment does not match this Mac (arm64 vs Intel). Update the app, then retry Setup.".into();
     }
-    "Python environment install failed. Open Diagnostics → Logs for details, then try Install again.".into()
+    "Python environment install failed. Open the Setup logs for details, then try again.".into()
 }
 
 #[cfg(test)]
