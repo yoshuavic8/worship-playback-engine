@@ -69,13 +69,24 @@ verify_static_macos() {
   return "$bad"
 }
 
+verify_audio_support() {
+  local exe="$1"
+  if ! run_for_triple "$exe" -hide_banner -demuxers 2>/dev/null | grep -Eq '[[:space:]]mp3([[:space:]]|$)' ||
+     ! run_for_triple "$exe" -hide_banner -decoders 2>/dev/null | grep -Eq '[[:space:]]mp3([[:space:]]|$)' ||
+     ! run_for_triple "$exe" -hide_banner -encoders 2>/dev/null | grep -Eq '[[:space:]]pcm_f32le([[:space:]]|$)'; then
+    echo "ERROR: $exe must support MP3 input and pcm_f32le output" >&2
+    return 1
+  fi
+}
+
 if [[ -f "$BIN/ffmpeg-$TRIPLE" && -f "$BIN/ffprobe-$TRIPLE" ]]; then
-  if verify_static_macos "$BIN/ffmpeg-$TRIPLE" && verify_static_macos "$BIN/ffprobe-$TRIPLE"; then
+  if verify_static_macos "$BIN/ffmpeg-$TRIPLE" &&
+     verify_static_macos "$BIN/ffprobe-$TRIPLE" &&
+     verify_audio_support "$BIN/ffmpeg-$TRIPLE"; then
     echo "ffmpeg $TRIPLE already built and verified"
     exit 0
   fi
-  echo "Existing ffmpeg $TRIPLE failed otool check — rebuilding" >&2
-  rm -f "$BIN/ffmpeg-$TRIPLE" "$BIN/ffprobe-$TRIPLE"
+  echo "Existing ffmpeg $TRIPLE failed verification — rebuilding" >&2
 fi
 
 rm -rf "$OUT"
@@ -108,7 +119,7 @@ run_for_triple ./configure \
   --enable-demuxer=wav,mp3,mov,mp4,m4a,aiff,flac,mpegps,mpegts,ogg \
   --enable-decoder=pcm_s16le,pcm_s24le,pcm_f32le,mp3,aac,flac,vorbis,opus \
   --enable-muxer=wav,mp4 \
-  --enable-encoder=pcm_s16le \
+  --enable-encoder=pcm_s16le,pcm_f32le \
   --enable-filter=aresample \
   --enable-zlib \
   "${extra_configure[@]+"${extra_configure[@]}"}"
@@ -116,6 +127,7 @@ run_for_triple ./configure \
 run_for_triple make -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 run_for_triple make install
 
+verify_audio_support "$OUT/bin/ffmpeg"
 install -m 755 "$OUT/bin/ffmpeg" "$BIN/ffmpeg-$TRIPLE"
 install -m 755 "$OUT/bin/ffprobe" "$BIN/ffprobe-$TRIPLE"
 

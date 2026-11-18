@@ -84,6 +84,7 @@ jobs:
             - Fixed first-run Python setup by bundling the audio worker README required by Hatchling.
             - Setup now opens its logs when installation fails and provides view/copy controls.
             - Captured `uv` installer output and improved setup failure details.
+            - Fixed MP3 preparation by enabling FFmpeg float PCM normalization.
 
             macOS 12+ universal (Apple Silicon + Intel). Ad-hoc signed, not Apple-notarized.
 
