@@ -58,7 +58,8 @@ pub fn init(app: AppHandle, root: PathBuf, resource_dir: Option<PathBuf>) -> Res
     logs::info(cat::SYSTEM, format!("Starting Worship Playback Engine {}", env!("CARGO_PKG_VERSION")));
     let db = Db::open(&boot_paths.db())?;
     db.recover_interrupted_jobs()?;
-    let settings: AppSettings = db.get_setting("app").unwrap_or_default();
+    let mut settings: AppSettings = db.get_setting("app").unwrap_or_default();
+    settings.normalize_ai();
     let mut audio: AudioSettings = db.get_setting("audio").unwrap_or_default();
     let paths = AppPaths::new(root, settings.library_path.clone().map(PathBuf::from));
     let engine = AudioEngine::new(

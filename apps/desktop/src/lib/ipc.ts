@@ -92,6 +92,9 @@ export const ipc = {
 
   // AI (local Ollama only — optional)
   aiStatus: () => call<T.AiStatus>("ai_status"),
+  aiTest: (provider: string, url: string) => call<T.AiTestResult>("ai_test_connection", { provider, url }),
+  aiSetToken: (token: string) => call<boolean>("ai_set_token", { token }),
+  aiHasToken: () => call<boolean>("ai_has_token"),
   aiCancel: () => call<void>("ai_cancel_request"),
   aiWarmup: () => call<void>("ai_warmup"),
   aiSong: (songId: string, text: string) => call<T.AiProposal>("ai_song_command", { songId, text }),

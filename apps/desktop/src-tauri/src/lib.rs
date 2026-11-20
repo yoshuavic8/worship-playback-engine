@@ -15,6 +15,7 @@ pub mod library;
 pub mod logs;
 pub mod midi;
 pub mod transpose;
+pub mod secrets;
 pub mod models;
 pub mod ollama_install;
 pub mod paths;
@@ -112,6 +113,9 @@ pub fn run() {
             commands::get_logs,
             commands::ai_status,
             commands::ai_cancel_request,
+            commands::ai_test_connection,
+            commands::ai_set_token,
+            commands::ai_has_token,
             commands::ai_warmup,
             commands::ai_song_command,
             commands::ai_setlist_command,

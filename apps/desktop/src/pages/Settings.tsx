@@ -1,13 +1,13 @@
-import { Bot, Cable, Check, FolderOpen, Keyboard, Loader2, Play, RotateCcw, Upload, Download, X } from "lucide-react";
+import { Cable, Check, FolderOpen, Keyboard, Play, RotateCcw, Upload, Download, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AiSettings } from "@/components/AiSettings";
 import { MappingList, MidiDevices, PresetActions } from "@/components/MidiPanel";
-import { Badge, Button, Card, PageHeader, Row, Segmented, Switch } from "@/components/ui";
+import { Button, Card, PageHeader, Row, Segmented, Switch } from "@/components/ui";
 import { openDialog, pickFolder, saveDialog } from "@/lib/actions";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { errMsg, ipc } from "@/lib/ipc";
 import { DEFAULT_SHORTCUTS, SHORTCUT_ACTIONS, keyLabel } from "@/lib/shortcuts";
-import type { AiStatus, AppSettings, Voice } from "@/lib/types";
+import type { AppSettings, Voice } from "@/lib/types";
 import { useApp } from "@/store/app";
 
 export function Settings() {
@@ -15,32 +15,11 @@ export function Settings() {
   const dataDir = useApp((s) => s.dataDir);
   const version = useApp((s) => s.version);
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [ai, setAi] = useState<AiStatus | null>(null);
-  const [checkingAi, setCheckingAi] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     ipc.listVoices().then(setVoices).catch(() => {});
-    checkAi();
   }, []);
-
-  const checkAi = async () => {
-    setCheckingAi(true);
-    try {
-      const status = await ipc.aiStatus();
-      setAi(status);
-      if (status.available) {
-        toast.success(status.model ? `Connected · ${status.model}` : `Connected · ${status.provider}`);
-      } else if (settings?.ollamaEnabled) {
-        toast.message("Ollama not connected", { description: "Optional — built-in rules and manual controls still work." });
-      }
-    } catch {
-      setAi(null);
-      toast.error("Could not check AI connection");
-    } finally {
-      setCheckingAi(false);
-    }
-  };
 
   if (!settings) return null;
 
@@ -52,7 +31,6 @@ export function Settings() {
       try {
         const s = await ipc.saveSettings(next);
         useApp.getState().setSettings(s);
-        if ("ollamaEnabled" in patch || "ollamaUrl" in patch || "ollamaModel" in patch) checkAi();
       } catch (e) {
         toast.error("Could not save settings", { description: errMsg(e) });
       }
@@ -160,40 +138,7 @@ export function Settings() {
         </div>
 
         <div className="col-span-12 space-y-5 xl:col-span-5">
-          <Card title={<span className="flex items-center gap-2"><Bot className="size-4 text-muted" />Asisten AI (Ollama, opsional)</span>}
-            subtitle="Matikan = tidak ada probe jaringan. Aplikasi tetap penuh dengan aturan bawaan."
-            actions={checkingAi ? <Loader2 className="size-4 animate-spin text-muted" /> : ai?.available ? <Badge tone="ok" dot>Connected</Badge> : settings.ollamaEnabled ? <Badge tone="warn" dot>Not reachable</Badge> : <Badge>Off</Badge>}>
-            <div className="divide-y divide-line">
-              <Row label="Aktifkan Asisten AI" hint="Contoh: “drummer tidak main”, “count-in 2 bar”. Bisa dimatikan kapan saja.">
-                <Switch checked={settings.ollamaEnabled} onChange={(ollamaEnabled) => save({ ollamaEnabled })} />
-              </Row>
-              <Row label="Ollama URL">
-                <input className="field h-8 w-56" value={settings.ollamaUrl} disabled={!settings.ollamaEnabled} onChange={(e) => save({ ollamaUrl: e.target.value }, 700)} />
-              </Row>
-              <Row label="Model" hint={ai?.models.length ? `${ai.models.length} installed` : "Pull one with: ollama pull qwen2.5:7b"}>
-                <select className="field h-8 w-56" value={settings.ollamaModel ?? ""} disabled={!settings.ollamaEnabled || !ai?.models.length} onChange={(e) => save({ ollamaModel: e.target.value || null })}>
-                  <option value="">Automatic{ai?.model ? ` (${ai.model})` : ""}</option>
-                  {ai?.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </Row>
-            </div>
-            <div className="mt-3 rounded-xl bg-bg-2/60 p-3 text-xs text-muted">
-              <b className="text-fg-2">How it is used:</b> the model only translates your words into a structured request. A rules engine checks it,
-              shows the exact changes, and nothing is applied until you confirm. Live playback never calls the model — if Ollama is closed,
-              the service runs exactly the same.
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => ipc.ollamaInstallInfo().then((i) => openUrl(i.downloadPage)).catch((e) => toast.error(errMsg(e)))}>
-                Unduh Ollama (resmi)
-              </Button>
-              <Button size="sm" variant="ghost" onClick={checkAi} loading={checkingAi} disabled={!settings.ollamaEnabled}>Uji koneksi</Button>
-              {settings.ollamaEnabled && (
-                <Button size="sm" variant="ghost" onClick={() => ipc.ollamaPullModel("qwen2.5:1.5b").then(() => toast.success("Model ditarik")).catch((e) => toast.error(errMsg(e)))}>
-                  Tarik qwen2.5:1.5b
-                </Button>
-              )}
-            </div>
-          </Card>
+          <AiSettings settings={settings} save={save} />
 
           <Card title="Backup & move" subtitle="Library metadata, setlists, presets and routing as one JSON file">
             <div className="flex gap-2">

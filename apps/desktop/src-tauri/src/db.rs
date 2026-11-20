@@ -649,7 +649,6 @@ impl Db {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// Jobs left running when the app quit can never finish; mark them failed on startup.
     // ---------- MIDI mappings ----------
 
     pub fn list_midi_mappings(&self) -> Result<Vec<crate::midi::mapping::Mapping>> {
@@ -721,6 +720,7 @@ impl Db {
         Ok(())
     }
 
+    /// Jobs left running when the app quit can never finish; mark them failed on startup.
     pub fn recover_interrupted_jobs(&self) -> Result<()> {
         let c = self.conn.lock();
         c.execute(

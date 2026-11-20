@@ -1,6 +1,6 @@
-//! Optional local AI assistant.
+//! Optional AI assistant.
 //!
-//!   User → AIProvider (Ollama, local) → structured JSON → schema validation → Rules Engine
+//!   User → AIProvider (None | Ollama | FreeLLMAPI) → structured JSON → schema validation → Rules Engine
 //!        → proposal shown to the user → user confirms → normal app commands
 //!
 //! AI prepares. Rules decide. Audio Engine performs.
@@ -28,6 +28,10 @@ pub fn clear_cancel() {
 pub trait AIProvider: Send + Sync {
     fn name(&self) -> &'static str;
     fn complete_json(&self, system: &str, user: &str, schema: &serde_json::Value) -> Result<String>;
+    /// Model shown on proposals.
+    fn model(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct NoAIProvider;
@@ -38,7 +42,7 @@ impl AIProvider for NoAIProvider {
     }
     fn complete_json(&self, _: &str, _: &str, _: &serde_json::Value) -> Result<String> {
         Err(anyhow!(
-            "The AI assistant is offline (Ollama not available). Presets and manual controls always work."
+            "The AI assistant is off. Presets, built-in rules and manual controls always work."
         ))
     }
 }
@@ -92,6 +96,9 @@ impl OllamaProvider {
 impl AIProvider for OllamaProvider {
     fn name(&self) -> &'static str {
         "ollama"
+    }
+    fn model(&self) -> Option<String> {
+        Some(self.model.clone())
     }
     fn complete_json(&self, system: &str, user: &str, schema: &serde_json::Value) -> Result<String> {
         clear_cancel();
@@ -160,12 +167,228 @@ impl AIProvider for OllamaProvider {
     }
 }
 
-/// Pick the provider: Ollama if enabled and reachable, otherwise NoAIProvider.
+// ---------------- FreeLLMAPI (OpenAI-compatible) ----------------
+
+pub const FREELLM_DEFAULT_URL: &str = "http://localhost:31415";
+/// Router aliases FreeLLMAPI understands, always offered in the model picker.
+pub const FREELLM_ALIASES: [&str; 3] = ["auto", "auto:fast", "auto:smart"];
+
+/// Normalise an OpenAI-compatible base URL: add http:// if missing and `/v1` exactly once.
+/// Pasted endpoint URLs (…/v1/chat/completions, …/v1/models) are accepted too.
+pub fn normalize_openai_base(url: &str) -> String {
+    let mut u = url.trim().trim_end_matches('/').to_string();
+    if u.is_empty() {
+        u = FREELLM_DEFAULT_URL.into();
+    }
+    if !u.contains("://") {
+        u = format!("http://{u}");
+    }
+    for suffix in ["/chat/completions", "/models"] {
+        if let Some(s) = u.strip_suffix(suffix) {
+            u = s.trim_end_matches('/').to_string();
+        }
+    }
+    if !u.ends_with("/v1") {
+        u.push_str("/v1");
+    }
+    u
+}
+
+/// Pull the JSON object out of a chat reply (models sometimes wrap it in ``` fences or prose).
+pub fn extract_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (end > start).then(|| text[start..=end].to_string())
+}
+
+pub struct OpenAiCompatProvider {
+    pub base: String,
+    pub token: Option<String>,
+    pub model: String,
+    /// Whole request; Live never calls the assistant, the editor shows a spinner with Cancel.
+    pub timeout: Duration,
+}
+
+impl OpenAiCompatProvider {
+    pub fn freellm(settings: &crate::settings::AppSettings) -> Self {
+        Self {
+            base: normalize_openai_base(&settings.freellm_url),
+            token: crate::secrets::freellm_token(),
+            model: if settings.freellm_model.trim().is_empty() { "auto".into() } else { settings.freellm_model.clone() },
+            timeout: Duration::from_secs(60),
+        }
+    }
+
+    fn client(&self, timeout: Duration) -> Result<reqwest::blocking::Client> {
+        Ok(reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(timeout)
+            .build()?)
+    }
+
+    fn auth(&self, rb: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+        match &self.token {
+            Some(t) => rb.bearer_auth(t),
+            None => rb,
+        }
+    }
+
+    /// GET /v1/models → model ids.
+    pub fn list_models(&self, timeout: Duration) -> Result<Vec<String>> {
+        let r = self
+            .auth(self.client(timeout)?.get(format!("{}/models", self.base)))
+            .send()
+            .map_err(|e| anyhow!("FreeLLMAPI is not reachable at {} ({})", self.base, short_err(&e)))?;
+        let status = r.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow!("FreeLLMAPI rejected the token ({status}). Check the unified token."));
+        }
+        if !status.is_success() {
+            return Err(anyhow!("FreeLLMAPI returned {status}"));
+        }
+        let j: serde_json::Value = r.json().map_err(|e| anyhow!("Unexpected /models reply ({e})"))?;
+        let mut ids: Vec<String> = j["data"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    fn chat(&self, body: &serde_json::Value) -> Result<reqwest::blocking::Response> {
+        self.auth(self.client(self.timeout)?.post(format!("{}/chat/completions", self.base)))
+            .json(body)
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    anyhow!("FreeLLMAPI timed out after {}s", self.timeout.as_secs())
+                } else {
+                    anyhow!("FreeLLMAPI is not reachable ({})", short_err(&e))
+                }
+            })
+    }
+}
+
+fn short_err(e: &reqwest::Error) -> String {
+    if e.is_connect() {
+        "connection refused, is it running?".into()
+    } else if e.is_timeout() {
+        "timed out".into()
+    } else {
+        e.to_string()
+    }
+}
+
+impl AIProvider for OpenAiCompatProvider {
+    fn name(&self) -> &'static str {
+        "freellmapi"
+    }
+    fn model(&self) -> Option<String> {
+        Some(self.model.clone())
+    }
+    fn complete_json(&self, system: &str, user: &str, schema: &serde_json::Value) -> Result<String> {
+        clear_cancel();
+        let system = format!("{system}\n\nReply with ONE JSON object only (no prose) that matches this JSON schema:\n{schema}");
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "temperature": 0,
+            "stream": false,
+            "response_format": { "type": "json_object" },
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user }
+            ]
+        });
+        let mut r = self.chat(&body)?;
+        if r.status() == reqwest::StatusCode::BAD_REQUEST {
+            // Some upstream models reject response_format: retry once without it.
+            body.as_object_mut().map(|o| o.remove("response_format"));
+            r = self.chat(&body)?;
+        }
+        if AI_CANCEL.load(Ordering::SeqCst) {
+            return Err(anyhow!("Request cancelled"));
+        }
+        let status = r.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow!("FreeLLMAPI rejected the token ({status})"));
+        }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(anyhow!("FreeLLMAPI free quota is used up for now (429)"));
+        }
+        if !status.is_success() {
+            return Err(anyhow!("FreeLLMAPI returned {status}"));
+        }
+        let j: serde_json::Value = r.json().map_err(|e| anyhow!("FreeLLMAPI reply was not JSON ({e})"))?;
+        let content = j["choices"][0]["message"]["content"].as_str().unwrap_or_default();
+        extract_json_object(content).ok_or_else(|| anyhow!("FreeLLMAPI returned no JSON"))
+    }
+}
+
+/// Pick the provider from Settings. Unreachable providers fail at call time and the
+/// caller falls back to the rules engine.
 pub fn provider(settings: &crate::settings::AppSettings) -> Box<dyn AIProvider> {
-    let info = compat::detect();
-    match OllamaProvider::for_settings(settings, &info) {
-        Some(p) => Box::new(p),
-        None => Box::new(NoAIProvider),
+    match settings.ai_provider.as_str() {
+        "freellmapi" => Box::new(OpenAiCompatProvider::freellm(settings)),
+        "ollama" => match OllamaProvider::for_settings(settings, &compat::detect()) {
+            Some(p) => Box::new(p),
+            None => Box::new(NoAIProvider),
+        },
+        _ => Box::new(NoAIProvider),
+    }
+}
+
+/// Song request → proposal. Any AI failure (offline, timeout, bad JSON) falls back to the rules engine.
+pub fn song_proposal(p: &dyn AIProvider, song: &Song, text: &str) -> AiProposal {
+    if p.name() == "none" {
+        return proposal_from_text(song, text, "rules", None);
+    }
+    let user = format!("{}\nMD REQUEST: {text}", song_context(song));
+    match p.complete_json(SONG_SYSTEM_PROMPT, &user, &intent_schema()).and_then(|raw| {
+        parse_intent(&raw).inspect_err(|_| {
+            crate::logs::warn(crate::logs::cat::AI, format!("rejected AI output: {raw}"));
+        })
+    }) {
+        Ok(intent) => {
+            let mut proposal = rules_for_song(song, &intent);
+            proposal.provider = p.name().into();
+            proposal.model = p.model();
+            proposal
+        }
+        Err(e) => {
+            crate::logs::warn(crate::logs::cat::AI, format!("{} failed, using rules: {e:#}", p.name()));
+            let mut proposal = proposal_from_text(song, text, "rules", None);
+            proposal.warnings.insert(0, format!("AI unavailable ({e:#}). Used built-in rules instead."));
+            proposal
+        }
+    }
+}
+
+/// Setlist request → proposal, with the same rules fallback.
+pub fn setlist_proposal(p: &dyn AIProvider, library: &[Song], text: &str) -> AiProposal {
+    let rules = |warning: Option<String>| {
+        let mut proposal = rules_for_setlist(library, &heuristic_intent(text));
+        proposal.provider = "rules".into();
+        if let Some(w) = warning {
+            proposal.warnings.insert(0, w);
+        }
+        proposal
+    };
+    if p.name() == "none" {
+        return rules(None);
+    }
+    let user = format!("{}\nREQUEST: {text}", library_context(library));
+    match p.complete_json(SETLIST_SYSTEM_PROMPT, &user, &intent_schema()).and_then(|raw| parse_intent(&raw)) {
+        Ok(intent) => {
+            let mut proposal = rules_for_setlist(library, &intent);
+            proposal.provider = p.name().into();
+            proposal.model = p.model();
+            proposal
+        }
+        Err(e) => {
+            crate::logs::warn(crate::logs::cat::AI, format!("{} setlist failed: {e:#}", p.name()));
+            rules(Some(format!("AI unavailable ({e:#}). Used built-in rules instead.")))
+        }
     }
 }
 
@@ -1172,5 +1395,66 @@ mod tests {
         let p = proposal_from_text(&song(), "count-in 2 bar", "rules", None);
         assert_eq!(p.provider, "rules");
         assert_eq!(p.timeline.as_ref().and_then(|t| t.count_in_bars), Some(2));
+    }
+
+    struct Mock(Result<String, String>);
+    impl AIProvider for Mock {
+        fn name(&self) -> &'static str {
+            "freellmapi"
+        }
+        fn complete_json(&self, _: &str, _: &str, _: &serde_json::Value) -> Result<String> {
+            self.0.clone().map_err(|e| anyhow!(e))
+        }
+        fn model(&self) -> Option<String> {
+            Some("auto".into())
+        }
+    }
+
+    #[test]
+    fn openai_base_gets_v1_exactly_once() {
+        assert_eq!(normalize_openai_base("http://localhost:31415"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("http://localhost:31415/"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("http://localhost:31415/v1"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("http://localhost:31415/v1/"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("localhost:31415"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("http://localhost:31415/v1/chat/completions"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("http://localhost:31415/v1/models"), "http://localhost:31415/v1");
+        assert_eq!(normalize_openai_base("  "), "http://localhost:31415/v1");
+    }
+
+    #[test]
+    fn json_is_extracted_from_fenced_replies() {
+        assert_eq!(extract_json_object("```json\n{\"a\":1}\n```").as_deref(), Some("{\"a\":1}"));
+        assert!(extract_json_object("no json here").is_none());
+    }
+
+    #[test]
+    fn provider_failure_falls_back_to_rules() {
+        let s = song();
+        let p = Mock(Err("FreeLLMAPI is not reachable".into()));
+        let pr = song_proposal(&p, &s, "drummer tidak main");
+        assert_eq!(pr.provider, "rules");
+        assert!(pr.warnings[0].contains("Used built-in rules"));
+        let bad = Mock(Ok("not json".into()));
+        assert_eq!(song_proposal(&bad, &s, "count-in 2 bar").provider, "rules");
+        let lib = vec![s.clone()];
+        assert_eq!(setlist_proposal(&p, &lib, "2 lagu cepat").provider, "rules");
+    }
+
+    #[test]
+    fn provider_is_chosen_from_settings() {
+        let mut st = crate::settings::AppSettings::default();
+        st.ai_provider = "none".into();
+        assert_eq!(provider(&st).name(), "none");
+        st.ai_provider = "freellmapi".into();
+        assert_eq!(provider(&st).name(), "freellmapi");
+        let mut old = crate::settings::AppSettings::default();
+        old.ai_provider = String::new();
+        old.ollama_enabled = false;
+        old.normalize_ai();
+        assert_eq!(old.ai_provider, "none");
+        old.ai_provider = "freellmapi".into();
+        old.normalize_ai();
+        assert!(!old.ollama_enabled);
     }
 }

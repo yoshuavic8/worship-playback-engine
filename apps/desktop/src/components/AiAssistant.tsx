@@ -8,7 +8,7 @@ import { Badge, Button } from "./ui";
 let cachedStatus: { at: number; s: AiStatus } | null = null;
 
 export function useAiStatus() {
-  const enabled = useApp((s) => s.settings?.ollamaEnabled);
+  const enabled = useApp((s) => `${s.settings?.aiProvider}:${s.settings?.freellmModel}:${s.settings?.ollamaModel}`);
   const [status, setStatus] = useState<AiStatus | null>(cachedStatus?.s ?? null);
   useEffect(() => {
     if (cachedStatus && Date.now() - cachedStatus.at < 30_000) {
@@ -22,7 +22,7 @@ export function useAiStatus() {
 
 /**
  * Natural-language MD assistant. The local model only *proposes* a structured intent; the Rust rules engine
- * validates it and the MD has to confirm before anything changes. Without Ollama, the same rules engine runs
+ * validates it and the MD has to confirm before anything changes. Without AI (or when it fails), the same rules engine runs
  * on keyword matches. Live playback never calls the model.
  */
 export function AiAssistant({ examples, run, onApply, placeholder, warmUp }: {
@@ -67,15 +67,16 @@ export function AiAssistant({ examples, run, onApply, placeholder, warmUp }: {
     setError(null);
   };
 
-  const rulesOnly = status?.rulesOnly ?? !status?.available;
+  const rulesOnly = !status?.available;
+  const providerName = status?.provider === "freellmapi" ? "FreeLLMAPI" : "Ollama";
 
   return (
     <div>
       {rulesOnly && (
         <div className="mb-3 rounded-lg border border-line bg-bg-2/50 px-3 py-2 text-xs text-muted">
-          <span className="font-medium text-fg-2">No Ollama model connected.</span>{" "}
+          <span className="font-medium text-fg-2">{status?.rulesOnly ? "AI is off (rules only)." : "AI is not connected."}</span>{" "}
           Use the arrangement editor and presets above, or type common phrases (e.g. “drummer tidak main”) — the built-in rules engine will propose changes.
-          <Button size="sm" variant="ghost" className="ml-2 inline-flex h-7" onClick={() => navigate("settings")}>Set up Ollama (optional)</Button>
+          <Button size="sm" variant="ghost" className="ml-2 inline-flex h-7" onClick={() => navigate("settings")}>AI settings (optional)</Button>
         </div>
       )}
       <div className="relative">
@@ -110,7 +111,7 @@ export function AiAssistant({ examples, run, onApply, placeholder, warmUp }: {
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
           <Loader2 className="size-3.5 animate-spin" />
           {status?.available
-            ? <>Thinking locally with {status.model ?? "Ollama"}…</>
+            ? <>Thinking with {status.model ?? providerName}…</>
             : <>Matching built-in rules…</>}
           {status?.available && (
             <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
@@ -146,7 +147,8 @@ export function AiAssistant({ examples, run, onApply, placeholder, warmUp }: {
             </Button>
             <Button size="sm" variant="ghost" icon={<X className="size-3.5" />} onClick={() => setProposal(null)}>Dismiss</Button>
             <span className="ml-auto self-center text-[0.68rem] text-faint">
-              {proposal.provider === "ollama" ? `Ollama · ${proposal.model ?? status?.model ?? ""}` : "Built-in rules"}
+              {proposal.provider === "ollama" ? `Ollama · ${proposal.model ?? status?.model ?? ""}`
+                : proposal.provider === "freellmapi" ? `FreeLLMAPI · ${proposal.model ?? ""}` : "Built-in rules"}
             </span>
           </div>
         </div>

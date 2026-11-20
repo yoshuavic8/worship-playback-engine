@@ -27,6 +27,7 @@ hound = "3.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 lofty = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+keyring = { version = "3", features = ["apple-native"] }
 sha2 = "0.10"
 hex = "0.4"
 crossbeam-channel = "0.5"

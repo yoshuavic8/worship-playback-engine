@@ -124,7 +124,8 @@ pub fn save_settings(ctx: S, mut settings: AppSettings) -> R<AppSettings> {
         *ctx.paths.write() = crate::paths::AppPaths::new(root, settings.library_path.clone().map(PathBuf::from));
         logs::info(cat::SYSTEM, format!("Library location changed to {:?}", settings.library_path));
     }
-    if old.ollama_enabled != settings.ollama_enabled {
+    settings.normalize_ai();
+    if old.ollama_enabled != settings.ollama_enabled || old.ollama_url != settings.ollama_url {
         crate::compat::invalidate_ollama_cache();
     }
     ctx.db.set_setting("app", &settings).map_err(e)?;
@@ -916,6 +917,7 @@ pub struct AiStatus {
     pub models: Vec<String>,
     pub rules_only: bool,
     pub compat_profile: String,
+    pub error: Option<String>,
 }
 
 #[tauri::command]
@@ -924,33 +926,54 @@ pub async fn ai_status(ctx: S<'_>) -> R<AiStatus> {
     blocking(move || {
         let settings = ctx.settings.read().clone();
         let info = crate::compat::detect();
-        let models = if settings.ollama_enabled {
-            crate::compat::probe_ollama_if_enabled(true, &settings.ollama_url)
-                .map(|p| p.models)
-                .unwrap_or_default()
-        } else {
-            vec![]
-        };
-        let p = ai::provider(&settings);
-        let model = ai::ollama_from_settings(&settings).map(|o| o.model);
-        Ok(AiStatus {
-            provider: p.name().into(),
-            available: p.name() != "none",
-            model,
-            models,
-            rules_only: p.name() == "none",
-            compat_profile: if info.profile == crate::compat::CompatProfile::Full {
-                "full".into()
-            } else {
-                "lite".into()
+        let compat_profile = if info.profile == crate::compat::CompatProfile::Full { "full" } else { "lite" }.to_string();
+        Ok(match settings.ai_provider.as_str() {
+            "freellmapi" => {
+                let p = ai::OpenAiCompatProvider::freellm(&settings);
+                let listed = p.list_models(std::time::Duration::from_secs(3));
+                let mut models: Vec<String> = ai::FREELLM_ALIASES.iter().map(|m| m.to_string()).collect();
+                for m in listed.as_ref().cloned().unwrap_or_default() {
+                    if !models.contains(&m) {
+                        models.push(m);
+                    }
+                }
+                AiStatus {
+                    provider: "freellmapi".into(),
+                    available: listed.is_ok(),
+                    model: Some(p.model.clone()),
+                    models,
+                    rules_only: false,
+                    compat_profile,
+                    error: listed.err().map(|e| format!("{e:#}")),
+                }
+            }
+            "ollama" => {
+                let models = crate::compat::probe_ollama_if_enabled(true, &settings.ollama_url)
+                    .map(|p| p.models)
+                    .unwrap_or_default();
+                let o = ai::ollama_from_settings(&settings);
+                AiStatus {
+                    provider: if o.is_some() { "ollama" } else { "none" }.into(),
+                    available: o.is_some(),
+                    model: o.map(|o| o.model),
+                    models,
+                    rules_only: false,
+                    compat_profile,
+                    error: None,
+                }
+            }
+            _ => AiStatus {
+                provider: "none".into(),
+                available: false,
+                model: None,
+                models: vec![],
+                rules_only: true,
+                compat_profile,
+                error: None,
             },
         })
     })
     .await
-}
-
-fn ai_model_name(settings: &AppSettings) -> Option<String> {
-    ai::ollama_from_settings(settings).map(|o| o.model)
 }
 
 #[tauri::command]
@@ -963,12 +986,72 @@ pub async fn ai_warmup(ctx: S<'_>) -> R<()> {
     let ctx = ctx.inner().clone();
     blocking(move || {
         let settings = ctx.settings.read().clone();
-        if let Some(o) = ai::ollama_from_settings(&settings) {
-            let _ = o.warm_up();
+        if settings.ai_provider == "ollama" {
+            if let Some(o) = ai::ollama_from_settings(&settings) {
+                let _ = o.warm_up();
+            }
         }
         Ok(())
     })
     .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTestResult {
+    pub ok: bool,
+    pub message: String,
+    pub models: Vec<String>,
+    pub latency_ms: u64,
+    pub base_url: String,
+}
+
+/// Test a provider with the URL typed in Settings (not yet saved). Uses the Keychain token.
+#[tauri::command]
+pub async fn ai_test_connection(provider: String, url: String) -> R<AiTestResult> {
+    blocking(move || {
+        let started = std::time::Instant::now();
+        let (ok, message, models, base_url) = match provider.as_str() {
+            "freellmapi" => {
+                let p = ai::OpenAiCompatProvider {
+                    base: ai::normalize_openai_base(&url),
+                    token: crate::secrets::freellm_token(),
+                    model: "auto".into(),
+                    timeout: std::time::Duration::from_secs(5),
+                };
+                match p.list_models(std::time::Duration::from_secs(5)) {
+                    Ok(m) => (true, format!("Connected · {} models", m.len()), m, p.base),
+                    Err(e) => (false, format!("{e:#}"), vec![], p.base),
+                }
+            }
+            "ollama" => {
+                crate::compat::invalidate_ollama_cache();
+                match crate::compat::probe_ollama_if_enabled(true, &url) {
+                    Ok(p) => (true, format!("Connected · {} models", p.models.len()), p.models, url.clone()),
+                    Err(e) => (false, format!("Ollama is not reachable ({e})"), vec![], url.clone()),
+                }
+            }
+            _ => (true, "Rules only. Nothing to connect.".into(), vec![], String::new()),
+        };
+        Ok(AiTestResult { ok, message, models, latency_ms: started.elapsed().as_millis() as u64, base_url })
+    })
+    .await
+}
+
+/// Save (or with an empty string, remove) the FreeLLMAPI unified token in the macOS Keychain.
+#[tauri::command]
+pub async fn ai_set_token(token: String) -> R<bool> {
+    blocking(move || {
+        crate::secrets::set_freellm_token(&token)?;
+        Ok(crate::secrets::freellm_token().is_some())
+    })
+    .await
+}
+
+/// Whether a FreeLLMAPI token is stored. The token itself never goes to the UI.
+#[tauri::command]
+pub async fn ai_has_token() -> R<bool> {
+    blocking(|| Ok(crate::secrets::freellm_token().is_some())).await
 }
 
 #[tauri::command]
@@ -982,30 +1065,8 @@ pub async fn ai_song_command(ctx: S<'_>, song_id: String, text: String) -> R<ai:
         let song = ctx.db.get_song(&song_id)?.ok_or_else(|| anyhow::anyhow!("Song not found"))?;
         let settings = ctx.settings.read().clone();
         let p = ai::provider(&settings);
-        let user = format!("{}\nMD REQUEST: {text}", ai::song_context(&song));
         logs::info(cat::AI, format!("[{}] song command: {text}", p.name()));
-        let proposal = if p.name() == "ollama" {
-            match p.complete_json(ai::SONG_SYSTEM_PROMPT, &user, &ai::intent_schema()) {
-                Ok(raw) => {
-                    let intent = ai::parse_intent(&raw).map_err(|err| {
-                        logs::warn(cat::AI, format!("rejected AI output: {raw}"));
-                        err
-                    })?;
-                    let mut proposal = ai::rules_for_song(&song, &intent);
-                    proposal.provider = "ollama".into();
-                    proposal.model = ai_model_name(&settings);
-                    proposal
-                }
-                Err(e) => {
-                    logs::warn(cat::AI, format!("Ollama failed, using rules: {e:#}"));
-                    let mut proposal = ai::proposal_from_text(&song, &text, "rules", None);
-                    proposal.warnings.insert(0, format!("AI unavailable ({e:#}). Used built-in rules instead."));
-                    proposal
-                }
-            }
-        } else {
-            ai::proposal_from_text(&song, &text, "rules", None)
-        };
+        let proposal = ai::song_proposal(p.as_ref(), &song, &text);
         logs::info(cat::AI, format!("proposal: {} change(s), {} warning(s)", proposal.changes.len(), proposal.warnings.len()));
         Ok(proposal)
     })
@@ -1023,31 +1084,8 @@ pub async fn ai_setlist_command(ctx: S<'_>, text: String) -> R<ai::AiProposal> {
         }
         let settings = ctx.settings.read().clone();
         let p = ai::provider(&settings);
-        let user = format!("{}\nREQUEST: {text}", ai::library_context(&library));
         logs::info(cat::AI, format!("[{}] setlist command: {text}", p.name()));
-        let proposal = if p.name() == "ollama" {
-            match p.complete_json(ai::SETLIST_SYSTEM_PROMPT, &user, &ai::intent_schema()) {
-                Ok(raw) => {
-                    let intent = ai::parse_intent(&raw)?;
-                    let mut proposal = ai::rules_for_setlist(&library, &intent);
-                    proposal.provider = "ollama".into();
-                    proposal.model = ai_model_name(&settings);
-                    proposal
-                }
-                Err(e) => {
-                    logs::warn(cat::AI, format!("Ollama setlist failed: {e:#}"));
-                    let mut proposal = ai::rules_for_setlist(&library, &ai::heuristic_intent(&text));
-                    proposal.provider = "rules".into();
-                    proposal.warnings.insert(0, format!("AI unavailable ({e:#}). Used built-in rules instead."));
-                    proposal
-                }
-            }
-        } else {
-            let mut proposal = ai::rules_for_setlist(&library, &ai::heuristic_intent(&text));
-            proposal.provider = "rules".into();
-            proposal
-        };
-        Ok(proposal)
+        Ok(ai::setlist_proposal(p.as_ref(), &library, &text))
     })
     .await
 }

@@ -52,6 +52,9 @@ struct Activity {
     mapped: bool,
 }
 
+/// (device name, message) from a MIDI port or the computer keyboard.
+type Incoming = (Option<String>, ControlMsg);
+
 pub struct MidiHub {
     maps: RwLock<Vec<Mapping>>,
     armed: Mutex<Option<LearnArm>>,
@@ -60,8 +63,8 @@ pub struct MidiHub {
     jumps: Mutex<quantize::JumpMemory>,
     devices: RwLock<Vec<String>>,
     error: RwLock<Option<String>>,
-    tx: Sender<(Option<String>, ControlMsg)>,
-    rx: Mutex<Option<Receiver<(Option<String>, ControlMsg)>>>,
+    tx: Sender<Incoming>,
+    rx: Mutex<Option<Receiver<Incoming>>>,
     last_activity: Mutex<Instant>,
     /// Audio settings changed by a knob; written to the database by the poll thread.
     levels_dirty: std::sync::atomic::AtomicBool,

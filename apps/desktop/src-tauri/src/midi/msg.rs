@@ -29,7 +29,7 @@ pub struct ControlMsg {
 /// Parse one MIDI message. System messages (clock, sysex, active sensing…) return None.
 pub fn parse(bytes: &[u8]) -> Option<ControlMsg> {
     let status = *bytes.first()?;
-    if status < 0x80 || status >= 0xF0 {
+    if !(0x80..0xF0).contains(&status) {
         return None;
     }
     let channel = status & 0x0F;

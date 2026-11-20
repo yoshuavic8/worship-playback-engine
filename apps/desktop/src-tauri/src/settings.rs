@@ -6,9 +6,16 @@ use std::collections::BTreeMap;
 pub struct AppSettings {
     pub user_name: String,
     pub library_path: Option<String>,
+    /// Kept in sync with `ai_provider == "ollama"` (older builds read this).
     pub ollama_enabled: bool,
     pub ollama_url: String,
     pub ollama_model: Option<String>,
+    /// none | ollama | freellmapi. Empty on settings saved before v0.3.0.
+    pub ai_provider: String,
+    /// FreeLLMAPI (OpenAI-compatible) base URL. The token is in the Keychain.
+    pub freellm_url: String,
+    /// auto | auto:fast | auto:smart | a listed model id
+    pub freellm_model: String,
     pub cue_voice: Option<String>,
     pub ui_scale: f32,
     pub shortcuts: BTreeMap<String, String>,
@@ -29,6 +36,22 @@ pub struct AppSettings {
     pub count_cue: bool,
     /// Fade-out length in seconds (F key / Fade button).
     pub fade_seconds: f32,
+}
+
+impl AppSettings {
+    /// Fill in the AI provider for settings from older versions and keep `ollama_enabled` in sync.
+    pub fn normalize_ai(&mut self) {
+        if !["none", "ollama", "freellmapi"].contains(&self.ai_provider.as_str()) {
+            self.ai_provider = if self.ollama_enabled { "ollama" } else { "none" }.into();
+        }
+        self.ollama_enabled = self.ai_provider == "ollama";
+        if self.freellm_url.trim().is_empty() {
+            self.freellm_url = crate::ai::FREELLM_DEFAULT_URL.into();
+        }
+        if self.freellm_model.trim().is_empty() {
+            self.freellm_model = "auto".into();
+        }
+    }
 }
 
 fn default_ui_locale() -> String {
@@ -70,6 +93,9 @@ impl Default for AppSettings {
             ollama_enabled: true,
             ollama_url: "http://127.0.0.1:11434".into(),
             ollama_model: None,
+            ai_provider: String::new(),
+            freellm_url: crate::ai::FREELLM_DEFAULT_URL.into(),
+            freellm_model: "auto".into(),
             cue_voice: Some("Samantha".into()),
             ui_scale: 1.0,
             shortcuts: default_shortcuts(),

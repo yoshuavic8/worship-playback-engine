@@ -76,7 +76,7 @@ let audio: T.AudioSettings = {
   routing: { id: "multi", name: "Multi-output — FOH 1-2 / Monitor 3-4", mode: "multi", foh: { kind: "stereo", left: 0, right: 1 }, monitor: { kind: "stereo", left: 2, right: 3 } },
 };
 let settings: T.AppSettings = {
-  userName: "yoshua", libraryPath: null, ollamaEnabled: true, ollamaUrl: "http://127.0.0.1:11434", ollamaModel: null, cueVoice: "Samantha", uiScale: 1,
+  userName: "yoshua", libraryPath: null, ollamaEnabled: true, ollamaUrl: "http://127.0.0.1:11434", ollamaModel: null, aiProvider: "ollama", freellmUrl: "http://localhost:31415", freellmModel: "auto", cueVoice: "Samantha", uiScale: 1,
   shortcuts: {}, defaultCountInBars: 1, separationModel: "htdemucs", separationEngine: "auto", separationDevice: "auto", separationProfile: "worship", autoAdvance: true, onboardingDone: true, uiLocale: "en",
 };
 const jobs: T.PreparationJob[] = [

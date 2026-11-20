@@ -180,6 +180,10 @@ export interface AppSettings {
   userName: string;
   libraryPath: string | null;
   ollamaEnabled: boolean;
+  /** none | ollama | freellmapi */
+  aiProvider: "none" | "ollama" | "freellmapi";
+  freellmUrl: string;
+  freellmModel: string;
   ollamaUrl: string;
   ollamaModel: string | null;
   cueVoice: string | null;
@@ -468,6 +472,15 @@ export interface AiStatus {
   models: string[];
   rulesOnly: boolean;
   compatProfile: "full" | "lite";
+  error?: string | null;
+}
+
+export interface AiTestResult {
+  ok: boolean;
+  message: string;
+  models: string[];
+  latencyMs: number;
+  baseUrl: string;
 }
 
 /** Validated timeline edits from the local assistant. Missing fields stay as they are. */
