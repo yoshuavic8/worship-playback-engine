@@ -391,7 +391,26 @@ impl MidiHub {
                 });
             }
             Target::TransposeUp | Target::TransposeDown => {
-                notice(ctx, "Transpose is not available in this build yet.");
+                let Some(l) = ctx.player.loaded() else { return Ok(()) };
+                if !ctx.player.is_idle(ctx) {
+                    notice(ctx, "Change the key before the song starts (stop first).");
+                    return Ok(());
+                }
+                let d = if *target == Target::TransposeUp { 1 } else { -1 };
+                let next = l.transpose_wanted as i32 + d;
+                if next.abs() > crate::transpose::MAX as i32 {
+                    notice(ctx, "Transpose range is −4 to +4.");
+                    return Ok(());
+                }
+                let c = ctx.arc();
+                std::thread::spawn(move || match crate::transpose::set_song_key(&c, &l.song_id, next) {
+                    Ok(song) => {
+                        let name = crate::keys::transposed_name(song.key.as_deref(), song.transpose);
+                        let ready = crate::transpose::is_ready(&song, song.transpose);
+                        notice(&c, &format!("Key {name}{}", if ready { "" } else { " (preparing…)" }));
+                    }
+                    Err(e) => notice(&c, &format!("{e:#}")),
+                });
             }
             _ => {}
         }

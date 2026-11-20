@@ -215,6 +215,12 @@ pub struct Song {
     pub key_pitch_class: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_mode: Option<String>,
+    /// Chosen key for playback, in semitones (−4…+4). Pre-rendered offline.
+    #[serde(default)]
+    pub transpose: i8,
+    /// Keys (≠ 0) whose stems are rendered and cached (read-only, from disk).
+    #[serde(default)]
+    pub transposed: Vec<i8>,
     pub time_signature: String,
     /// Time (seconds) of the first downbeat, used to anchor the click grid.
     pub beat_offset: f64,

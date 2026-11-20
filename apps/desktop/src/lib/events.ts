@@ -6,7 +6,8 @@ import { importPaths } from "./actions";
 import { isTauri } from "./ipc";
 import { targetLabel, useMidi } from "./midi";
 import { sourceLabel } from "./midi";
-import type { AudioSettings, LoadedInfo, MidiActivity, MidiMapping, MidiStatus, PlaybackStatus, PreparationJob } from "./types";
+import { useTranspose } from "./transpose";
+import type { AudioSettings, LoadedInfo, MidiActivity, MidiMapping, MidiStatus, PlaybackStatus, PreparationJob, TransposeJob } from "./types";
 
 /** Wire Rust → UI events once. Returns a cleanup function. */
 export async function connectEvents(): Promise<() => void> {
@@ -57,6 +58,14 @@ export async function connectEvents(): Promise<() => void> {
     });
   }));
   offs.push(await listen<string>("midi:notice", (e) => toast.message(e.payload, { id: "midi-notice" })));
+
+  // Transpose renders
+  useTranspose.getState().refresh().catch(() => {});
+  offs.push(await listen<TransposeJob>("transpose:progress", (e) => {
+    const j = e.payload;
+    useTranspose.getState().set(j);
+    if (j.state === "failed") toast.error(`Key change for “${j.title}” failed`, { description: j.message, id: `tr-${j.songId}` });
+  }));
 
   offs.push(await listen<string>("audio:error", (e) => toast.error(e.payload, { id: "audio-error", duration: 8000 })));
   offs.push(await listen("audio:deviceChanged", () => app().refreshAudio()));

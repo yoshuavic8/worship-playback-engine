@@ -424,6 +424,9 @@ pub fn save_song(ctx: S, song: Song) -> R<Song> {
     s.created_at = existing.created_at.clone();
     s.prepared_at = existing.prepared_at.clone();
     s.duration = existing.duration;
+    // The key is changed only through song_set_transpose.
+    s.transpose = existing.transpose;
+    s.transposed = existing.transposed.clone();
     if matches!(s.status, SongStatus::Warning) && (tempo_edited || key_edited) {
         if let Some(analysis) = s.analysis.as_mut() {
             if let Some(arr) = analysis.get_mut("warnings").and_then(|w| w.as_array_mut()) {
@@ -1178,4 +1181,40 @@ pub fn audio_set_level(ctx: S, kind: String, db: f32) {
     if db.is_finite() {
         crate::midi::set_audio_level(&ctx, &kind, db);
     }
+}
+
+// ---------------- transpose ----------------
+
+/// Choose a song's key (−4…+4). Rendering is queued; Live switches only when the song is not playing.
+#[tauri::command]
+pub async fn song_set_transpose(ctx: S<'_>, song_id: String, semitones: i32) -> R<Song> {
+    let ctx = ctx.inner().clone();
+    blocking(move || crate::transpose::set_song_key(&ctx, &song_id, semitones)).await
+}
+
+/// Render the chosen key of every listed song that is not cached yet (e.g. a whole setlist).
+#[tauri::command]
+pub fn transpose_prepare(ctx: S, song_ids: Vec<String>) -> R<usize> {
+    let mut n = 0;
+    let mut skipped = vec![];
+    for id in song_ids {
+        let Some(song) = ctx.db.get_song(&id).map_err(e)? else { continue };
+        if song.transpose == 0 {
+            continue;
+        }
+        match ctx.transpose.enqueue(&ctx, &song, song.transpose) {
+            Ok(true) => n += 1,
+            Ok(false) => {}
+            Err(_) => skipped.push(song.title),
+        }
+    }
+    if n == 0 && !skipped.is_empty() {
+        return Err(format!("Prepare these songs first (no stems): {}", skipped.join(", ")));
+    }
+    Ok(n)
+}
+
+#[tauri::command]
+pub fn transpose_jobs(ctx: S) -> Vec<crate::transpose::TransposeJob> {
+    ctx.transpose.jobs()
 }

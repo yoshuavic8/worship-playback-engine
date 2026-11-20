@@ -8,11 +8,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AiAssistant } from "@/components/AiAssistant";
 import { KeyBpm, SongStatusBadge, presetName } from "@/components/SongBits";
+import { TransposePicker } from "@/components/TransposePicker";
 import { Badge, Button, Card, Dialog, IconButton, Segmented, Tip } from "@/components/ui";
 import { prepareSongs } from "@/lib/actions";
 import { cn, fmtDuration, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
 import { buildPlan, resolveSections } from "@/lib/sections";
+import { needsKeyRender, useTranspose } from "@/lib/transpose";
 import type { PreflightReport, Setlist, SetlistItem, Song } from "@/lib/types";
 import { useApp } from "@/store/app";
 
@@ -95,6 +97,9 @@ export function SetlistEditor({ id }: { id: string }) {
 
   const setItem = (iid: string, patch: Partial<SetlistItem>) => update({ items: items.map((x) => (x.id === iid ? { ...x, ...patch } : x)) });
   const unprepared = items.map((it) => songOf(it.songId)).filter((s): s is Song => !!s && (s.status === "imported" || s.status === "error"));
+  const keyRenders = items.map((it) => songOf(it.songId)).filter((s): s is Song => !!s && needsKeyRender(s));
+  const trJobs = useTranspose((s) => s.jobs);
+  const keysBusy = Object.values(trJobs).some((j) => (j.state === "queued" || j.state === "running") && items.some((it) => it.songId === j.songId));
 
   return (
     <div className="pb-12">
@@ -148,10 +153,22 @@ export function SetlistEditor({ id }: { id: string }) {
 
         <div className="col-span-12 space-y-5 xl:col-span-4">
           <Preflight report={report} checking={checking} onRun={() => runPreflight(false)}
-            extra={unprepared.length > 0 && (
-              <Button size="sm" variant="primary" icon={<Sparkles className="size-3.5" />} onClick={() => prepareSongs(unprepared.map((s) => s.id))}>
-                Prepare {unprepared.length} song{unprepared.length > 1 ? "s" : ""}
-              </Button>
+            extra={(unprepared.length > 0 || keyRenders.length > 0 || keysBusy) && (
+              <div className="flex flex-wrap gap-2">
+                {unprepared.length > 0 && (
+                  <Button size="sm" variant="primary" icon={<Sparkles className="size-3.5" />} onClick={() => prepareSongs(unprepared.map((s) => s.id))}>
+                    Prepare {unprepared.length} song{unprepared.length > 1 ? "s" : ""}
+                  </Button>
+                )}
+                {(keyRenders.length > 0 || keysBusy) && (
+                  <Button size="sm" loading={keysBusy} title="Render every song in its chosen key before the service"
+                    onClick={() => ipc.transposePrepare(items.map((it) => it.songId))
+                      .then((n) => n && toast.success(`Rendering ${n} key${n > 1 ? "s" : ""}`, { description: "Runs in the background and pauses while music plays." }))
+                      .catch((e) => toast.error(errMsg(e)))}>
+                    {keysBusy ? "Rendering keys…" : `Prepare keys (${keyRenders.length})`}
+                  </Button>
+                )}
+              </div>
             )} />
           <Card title="Suggest with AI" subtitle="Local Ollama builds a draft — you decide">
             <AiAssistant
@@ -237,6 +254,10 @@ function ItemRow({ index, item, song, open, onToggle, onChange, onRemove, issues
               {sections.filter((s) => s.id !== "__song").map((s) => <option key={s.id} value={s.id}>{s.label} ({fmtTime(s.start)})</option>)}
             </select>
           </label>
+          <div className="col-span-2">
+            <span className="label mb-1.5 block">Key (saved with the song)</span>
+            <TransposePicker song={song} size="sm" />
+          </div>
           <TriState label="Click" value={item.clickEnabled} songDefault={song.routing.clickEnabled} onChange={(v) => onChange({ clickEnabled: v })} />
           <TriState label="Voice cues" value={item.cueEnabled} songDefault={song.routing.cueEnabled} onChange={(v) => onChange({ cueEnabled: v })} />
           <TriState label="Backing to FOH" value={item.fohEnabled} songDefault={song.routing.backingToFoh} onChange={(v) => onChange({ fohEnabled: v })} />

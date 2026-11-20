@@ -92,6 +92,10 @@ export interface Song {
   bpm: number | null;
   key: string | null;
   keyPitchClass?: number | null;
+  /** Chosen key in semitones (−4…+4). */
+  transpose?: number;
+  /** Keys (≠ 0) already rendered and cached. */
+  transposed?: number[];
   keyMode?: "major" | "minor" | string | null;
   timeSignature: string;
   beatOffset: number;
@@ -298,6 +302,10 @@ export interface LoadedInfo {
   countInBars: number;
   context: PlayContext;
   liveIndex: number | null;
+  /** Key playing now (0 = original; also 0 when the chosen key is not rendered yet). */
+  transpose?: number;
+  /** Key chosen for the song. */
+  transposeWanted?: number;
 }
 
 export type PlaybackState =
@@ -550,4 +558,13 @@ export interface MidiActivity {
   value: number;
   key: string | null;
   mapped: boolean;
+}
+
+export interface TransposeJob {
+  songId: string;
+  title: string;
+  semitones: number;
+  state: "queued" | "running" | "done" | "failed";
+  progress: number;
+  message: string;
 }

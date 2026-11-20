@@ -64,6 +64,12 @@ pub struct LoadedInfo {
     pub count_in_bars: u32,
     pub context: PlayContext,
     pub live_index: Option<usize>,
+    /// Key actually playing, in semitones (0 when the chosen key is not rendered yet).
+    #[serde(default)]
+    pub transpose: i8,
+    /// Key chosen for the song.
+    #[serde(default)]
+    pub transpose_wanted: i8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -246,6 +252,26 @@ impl Player {
         Ok(next)
     }
 
+    /// Playing or counting in.
+    pub fn is_rolling(&self, ctx: &Ctx) -> bool {
+        matches!(self.effective_state(ctx), PlaybackState::Playing | PlaybackState::CountIn)
+    }
+
+    /// Loaded and sitting at the start (not playing, not paused mid-song).
+    pub fn is_idle(&self, ctx: &Ctx) -> bool {
+        matches!(self.effective_state(ctx), PlaybackState::Ready | PlaybackState::Stopped)
+    }
+
+    /// Load the current song again (e.g. after its key changed). Keeps live position in the setlist.
+    pub fn reload(&self, ctx: &Ctx) -> Result<LoadedInfo> {
+        let l = self.loaded().ok_or_else(|| anyhow!("No song loaded"))?;
+        if let Some(i) = l.live_index {
+            self.live_goto(ctx, i)
+        } else {
+            self.load(ctx, &l.song_id, l.context, None, None)
+        }
+    }
+
     pub fn loaded(&self) -> Option<LoadedInfo> {
         self.inner.lock().loaded.clone()
     }
@@ -336,6 +362,21 @@ impl Player {
         // track. The rendered backing is only the fallback.
         let use_stems = stems_ok;
 
+        // Transpose: only a fully rendered key is used; never rendered here.
+        let wanted = song.transpose;
+        let semis = if wanted != 0 && use_stems && crate::transpose::is_ready(song, wanted) { wanted } else { 0 };
+        if wanted != 0 && semis == 0 {
+            let name = crate::keys::transposed_name(song.key.as_deref(), wanted);
+            warnings.push(if use_stems {
+                format!("Key {name} is not prepared yet, so the original key plays. Prepare keys before the service.")
+            } else {
+                format!("Key {name} needs separated stems, so the original key plays.")
+            });
+        }
+        let pick = |role: TrackRole, rel: &String| {
+            crate::transpose::track_path(song, role, semis).unwrap_or_else(|| song_path(song, rel))
+        };
+
         let mut tracks: Vec<Track> = vec![];
         let mut infos: Vec<TrackInfo> = vec![];
         let push = |t: Track, gain_db: f32, tracks: &mut Vec<Track>, infos: &mut Vec<TrackInfo>| {
@@ -345,8 +386,12 @@ impl Player {
         let mut source = String::new();
 
         if use_stems {
-            let stem = |rel: &Option<String>| self.get_buffer(&song_path(song, rel.as_ref().unwrap()), rate);
-            match (stem(&song.stems.other), stem(&song.stems.bass), stem(&song.stems.drums)) {
+            let stem = |role: TrackRole, rel: &Option<String>| self.get_buffer(&pick(role, rel.as_ref().unwrap()), rate);
+            match (
+                stem(TrackRole::Other, &song.stems.other),
+                stem(TrackRole::Bass, &song.stems.bass),
+                stem(TrackRole::Drums, &song.stems.drums),
+            ) {
                 (Ok(o), Ok(b), Ok(d)) => {
                     push(Track::new(TrackRole::Other, o, db_to_gain(prep.other_db), to_foh, to_mon), prep.other_db, &mut tracks, &mut infos);
                     let mut bt = Track::new(TrackRole::Bass, b, db_to_gain(prep.bass_db), to_foh, to_mon);
@@ -407,7 +452,12 @@ impl Player {
         // Guide vocal: monitor only, never FOH. Always loaded when the stem
         // exists so it can be opened from the live mixer.
         if file_exists(song, &song.stems.vocals) {
-            if let Ok(v) = self.get_buffer(&song_path(song, song.stems.vocals.as_ref().unwrap()), rate) {
+            let vocal_path = if source == "stems" {
+                pick(TrackRole::Vocals, song.stems.vocals.as_ref().unwrap())
+            } else {
+                song_path(song, song.stems.vocals.as_ref().unwrap())
+            };
+            if let Ok(v) = self.get_buffer(&vocal_path, rate) {
                 let mut t = Track::new(TrackRole::Vocals, v, db_to_gain(-3.0), false, true);
                 t.muted = !(song.routing.guide_vocal_to_monitor && context == PlayContext::Live)
                     && !(context == PlayContext::Rehearsal && prep.vocals == StemMode::Keep);
@@ -527,6 +577,10 @@ impl Player {
             count_voices,
             count_cue: count_cue && click_available,
         };
+        let applied = if source == "stems" { semis } else { 0 };
+        if semis != 0 && applied == 0 {
+            warnings.push("Transposed stems could not be loaded, so the original key plays.".into());
+        }
         let info = LoadedInfo {
             generation,
             song_id: song.id.clone(),
@@ -548,6 +602,8 @@ impl Player {
             count_in_bars: song.count_in_bars,
             context,
             live_index,
+            transpose: applied,
+            transpose_wanted: wanted,
         };
         Ok((loaded, info))
     }

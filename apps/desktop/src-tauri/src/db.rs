@@ -145,6 +145,10 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_midi_song ON midi_mappings(song_id);
     "#,
+    // v3 — per-song transpose (v0.3.0). Only written by set_song_transpose.
+    r#"
+    ALTER TABLE songs ADD COLUMN transpose INTEGER NOT NULL DEFAULT 0;
+    "#,
 ];
 
 pub struct Db {
@@ -318,6 +322,12 @@ impl Db {
             )?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    pub fn set_song_transpose(&self, id: &str, semitones: i8) -> Result<()> {
+        let c = self.conn.lock();
+        c.execute("UPDATE songs SET transpose = ?2 WHERE id = ?1", params![id, semitones as i64])?;
         Ok(())
     }
 
@@ -774,6 +784,8 @@ fn row_to_song(r: &Row) -> rusqlite::Result<Song> {
         key: r.get("song_key")?,
         key_pitch_class: None,
         key_mode: None,
+        transpose: crate::transpose::clamp(r.get::<_, i64>("transpose").unwrap_or(0) as i32),
+        transposed: vec![],
         time_signature: r.get("time_signature")?,
         beat_offset: r.get("beat_offset")?,
         duration: r.get("duration")?,
@@ -815,6 +827,7 @@ fn row_to_song(r: &Row) -> rusqlite::Result<Song> {
         }
     }
     crate::keys::sync_key_fields(&mut song.key, &mut song.key_pitch_class, &mut song.key_mode);
+    song.transposed = crate::transpose::cached_keys(&song);
     Ok(song)
 }
 
@@ -841,7 +854,7 @@ fn load_song_children(c: &Connection, s: &mut Song) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub fn sample_song(id: &str) -> Song {
@@ -853,6 +866,8 @@ mod tests {
             key: Some("A".into()),
             key_pitch_class: Some(9),
             key_mode: Some("major".into()),
+            transpose: 0,
+            transposed: vec![],
             time_signature: "4/4".into(),
             beat_offset: 0.0,
             duration: 200.0,

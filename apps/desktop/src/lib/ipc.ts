@@ -97,6 +97,11 @@ export const ipc = {
   aiSong: (songId: string, text: string) => call<T.AiProposal>("ai_song_command", { songId, text }),
   aiSetlist: (text: string) => call<T.AiProposal>("ai_setlist_command", { text }),
 
+  // transpose
+  songSetTranspose: (songId: string, semitones: number) => call<T.Song>("song_set_transpose", { songId, semitones }),
+  transposePrepare: (songIds: string[]) => call<number>("transpose_prepare", { songIds }),
+  transposeJobs: () => call<T.TransposeJob[]>("transpose_jobs"),
+
   // MIDI / keyboard mapping
   midiStatus: () => call<T.MidiStatus>("midi_status"),
   midiMappings: () => call<T.MidiMapping[]>("midi_mappings"),

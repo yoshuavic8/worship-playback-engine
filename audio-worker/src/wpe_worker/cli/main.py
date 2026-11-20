@@ -3,6 +3,7 @@
     prepare --request req.json   full preparation, JSON-lines events on stdout
     analyze <file>               BPM / key / sections only (debugging)
     engines --request req.json   which separation engines are usable
+    transpose --request req.json pre-render stems in other keys (Signalsmith Stretch)
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--bpb", type=int, default=4)
     e = sub.add_parser("engines")
     e.add_argument("--request", required=True)
+    tr = sub.add_parser("transpose")
+    tr.add_argument("--request", required=True)
     args = ap.parse_args(argv)
 
     if args.cmd == "prepare":
@@ -41,6 +44,20 @@ def main(argv: list[str] | None = None) -> int:
         from ..pipeline import run_and_emit
 
         return run_and_emit(req)
+
+    if args.cmd == "transpose":
+        from ..rendering import transpose
+
+        try:
+            with open(args.request, encoding="utf-8") as f:
+                treq = transpose.TransposeRequest.parse(json.load(f))
+        except WorkerError as err:
+            emit("error", code=err.code, message=err.message)
+            return 2
+        except Exception as err:  # noqa: BLE001
+            emit("error", code="bad_request", message=f"Invalid request: {err}")
+            return 2
+        return transpose.run_and_emit(treq)
 
     if args.cmd == "analyze":
         import soundfile as sf

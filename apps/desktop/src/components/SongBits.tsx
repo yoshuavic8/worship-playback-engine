@@ -1,3 +1,4 @@
+import { semitoneLabel, transposedKey } from "@/lib/transpose";
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
 import { useApp } from "@/store/app";
 import { visibleReviewWarnings } from "@/lib/reviewWarnings";
@@ -40,10 +41,17 @@ export function SongStatusBadge({ song }: { song: Song }) {
   );
 }
 
-export function KeyBpm({ song, className = "" }: { song: Pick<Song, "key" | "bpm" | "timeSignature">; className?: string }) {
+export function KeyBpm({ song, className = "" }: { song: Pick<Song, "key" | "bpm" | "timeSignature" | "transpose">; className?: string }) {
+  const t = song.transpose ?? 0;
   return (
     <span className={`tnum inline-flex items-center gap-2 text-fg-2 ${className}`}>
-      <span className="min-w-[2.2ch] font-semibold text-fg" title={song.key ?? undefined}>{formatKeyDisplay(song.key)}</span>
+      {t !== 0 ? (
+        <span className="min-w-[2.2ch] font-semibold text-accent" title={`Original ${song.key ?? "key"}, transposed ${semitoneLabel(t)}`}>
+          {transposedKey(song.key, t)} <span className="text-[0.85em] font-medium text-muted">{semitoneLabel(t)}</span>
+        </span>
+      ) : (
+        <span className="min-w-[2.2ch] font-semibold text-fg" title={song.key ?? undefined}>{formatKeyDisplay(song.key)}</span>
+      )}
       <span className="text-faint">·</span>
       <span>{song.bpm ? `${Math.round(song.bpm * 1000) / 1000}` : "—"} <span className="text-muted">BPM</span></span>
       {song.timeSignature !== "4/4" && (

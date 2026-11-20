@@ -3,8 +3,8 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/format";
 import { ipc } from "@/lib/ipc";
-import { isContinuous, isSwitch, sourceLabel, targetLabel, useMidi } from "@/lib/midi";
-import type { ButtonMode, EncoderMode, MidiMapping } from "@/lib/types";
+import { isContinuous, isSwitch, mappingFor, sourceLabel, sourceShort, targetKey, targetLabel, useMidi } from "@/lib/midi";
+import type { ButtonMode, EncoderMode, MidiMapping, MidiTarget } from "@/lib/types";
 import { useApp } from "@/store/app";
 import { Badge, Button, Confirm, Segmented, Slider } from "./ui";
 
@@ -193,6 +193,10 @@ export function LearnDrawer() {
             ]}
           />
         </div>
+        <div>
+          <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-faint">Controls without a button</div>
+          <MoreTargets />
+        </div>
         <MidiDevices />
         <div>
           <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-faint">Mappings</div>
@@ -201,5 +205,32 @@ export function LearnDrawer() {
         <PresetActions />
       </div>
     </aside>
+  );
+}
+
+const MORE: MidiTarget[] = [
+  { type: "prevSection" }, { type: "nextSection" }, { type: "cancelJump" },
+  { type: "transposeDown" }, { type: "transposeUp" },
+];
+
+/** Learnable actions that have no on-screen control on the Live page. */
+function MoreTargets() {
+  const armed = useMidi((s) => s.armed);
+  const mappings = useMidi((s) => s.mappings);
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {MORE.map((t) => {
+        const on = armed != null && targetKey(armed.target) === targetKey(t);
+        const m = mappingFor(mappings, t, null);
+        return (
+          <button key={t.type} onClick={() => (on ? useMidi.getState().disarm() : useMidi.getState().arm(t, null))}
+            className={cn("flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors",
+              on ? "animate-pulse-soft border-accent bg-accent/20 text-fg" : m ? "border-mon/50 bg-mon/10 text-fg-2" : "border-dashed border-accent/50 text-fg-2 hover:bg-accent/10")}>
+            {targetLabel(t)}
+            {m && <span className="rounded bg-mon px-1 text-[0.6rem] font-black text-black">{sourceShort(m.source)}</span>}
+          </button>
+        );
+      })}
+    </div>
   );
 }

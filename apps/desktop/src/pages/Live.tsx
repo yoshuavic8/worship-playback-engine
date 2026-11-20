@@ -8,12 +8,14 @@ import { toast } from "sonner";
 import { Metronome } from "@/components/icons";
 import { Mappable } from "@/components/Mappable";
 import { LearnDrawer } from "@/components/MidiPanel";
+import { TransposePicker } from "@/components/TransposePicker";
 import { KeyBpm } from "@/components/SongBits";
 import { PanicButton, StateBadge, planLen, planPos, segOffset } from "@/components/Transport";
-import { Badge, Button, Meter, Slider, StatusDot, Tip } from "@/components/ui";
+import { Badge, Button, Dialog, Meter, Slider, StatusDot, Tip } from "@/components/ui";
 import { cn, fmtDate, fmtDb, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
 import { TRACK_LABEL, useMidi } from "@/lib/midi";
+import { semitoneLabel, transposedKey } from "@/lib/transpose";
 import { sectionColor } from "@/lib/sections";
 import { DEFAULT_SHORTCUTS, keyLabel } from "@/lib/shortcuts";
 import {
@@ -70,6 +72,8 @@ function LiveView({ live }: { live: LiveInfo }) {
   const status = usePlayback((s) => s.status);
   const [full, setFull] = useState(false);
   const [now, setNow] = useState(new Date());
+  const [keyOpen, setKeyOpen] = useState(false);
+  const songs = useApp((s) => s.songs);
   const learn = useMidi((s) => s.learn);
   const scope = useMidi((s) => s.sectionScope);
   const mapCount = useMidi((s) => s.mappings.length);
@@ -203,7 +207,11 @@ function LiveView({ live }: { live: LiveInfo }) {
                 {fallback && <Badge tone="warn"><AlertTriangle className="size-3" />Playing {loaded?.source}</Badge>}
               </div>
               <div className="flex shrink-0 gap-2">
-              <BigStat label="Key" value={loaded?.key ?? song?.key ?? "—"} />
+              <button className="block rounded-2xl text-left transition-opacity hover:opacity-80" onClick={() => setKeyOpen(true)} title="Change key">
+                  <BigStat label={loaded?.transpose ? `Key ${semitoneLabel(loaded.transpose)}` : "Key"}
+                    value={loaded?.transpose ? transposedKey(loaded.key, loaded.transpose) : loaded?.key ?? song?.key ?? "—"}
+                    tone={loaded?.transpose ? "accent" : undefined} />
+                </button>
               <BigStat label="BPM" value={loaded?.bpm ? String(Math.round(loaded.bpm * 1000) / 1000) : "—"} />
               <BigStat label="Time" value={loaded?.timeSignature ?? "4/4"} />
               </div>
@@ -334,6 +342,15 @@ function LiveView({ live }: { live: LiveInfo }) {
           </div>
         </aside>
         {learn && <LearnDrawer />}
+        {(() => {
+          const s = songs.find((x) => x.id === (loaded?.songId ?? song?.id));
+          return s ? (
+            <Dialog open={keyOpen} onOpenChange={setKeyOpen} title={`Key · ${s.title}`} width={560}
+              description="Rendered keys switch only before the song starts. Click, cues and drums never change pitch.">
+              <TransposePicker song={s} disabled={rolling} disabledHint="Stop the song to change its key." />
+            </Dialog>
+          ) : null;
+        })()}
       </div>
     </div>
   );
@@ -436,11 +453,11 @@ function describe(t?: { kind: string; channel?: number; left?: number; right?: n
   return `${(t.left ?? 0) + 1}-${(t.right ?? 1) + 1}`;
 }
 
-function BigStat({ label, value }: { label: string; value: string }) {
+function BigStat({ label, value, tone }: { label: string; value: string; tone?: "accent" }) {
   return (
-    <div className="min-w-[5.5rem] rounded-2xl border border-line bg-panel/60 px-4 py-3 text-center">
-      <div className="label">{label}</div>
-      <div className="tnum mt-0.5 text-[1.7rem] leading-tight font-bold">{value}</div>
+    <div className={cn("min-w-[5.5rem] rounded-2xl border bg-panel/60 px-4 py-3 text-center", tone ? "border-accent/50" : "border-line")}>
+      <div className={cn("label", tone && "text-accent")}>{label}</div>
+      <div className={cn("tnum mt-0.5 text-[1.7rem] leading-tight font-bold", tone && "text-accent")}>{value}</div>
     </div>
   );
 }

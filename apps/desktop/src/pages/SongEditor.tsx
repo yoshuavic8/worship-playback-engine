@@ -6,6 +6,7 @@ import { ArrangementEditor } from "@/components/Arrangement";
 import { PresetPicker, StemControls, samePrep } from "@/components/StemSettings";
 import { SongTimeline, type SnapMode } from "@/components/SongTimeline";
 import { Badge, Button, Card, Slider, Switch } from "@/components/ui";
+import { TransposePicker } from "@/components/TransposePicker";
 import { acceptSongReview, loadSong, prepareSongs } from "@/lib/actions";
 import { clampTimelineZoom } from "@/lib/editorZoom";
 import { cn, fmtDb, fmtTime } from "@/lib/format";
@@ -811,6 +812,11 @@ export function SongEditor({ id }: { id: string }) {
                 <textarea className="field min-h-24 text-sm" placeholder="e.g. Count-in 2 bars. Bridge soft, then build."
                   value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
               </Card>
+              {stored && (
+                <Card title="Key" subtitle="Play the song lower or higher. Rendered offline once per key; click, cues and drums never change pitch.">
+                  <TransposePicker song={stored} />
+                </Card>
+              )}
               <CountInSettings draft={draft} set={edit} />
               <Card title="Live arrangement" subtitle="Order the band will play. Repeats and skips jump sample-accurately — no re-render needed.">
                 <ArrangementEditor sections={sections} rawSections={draft.sections} value={draft.arrangement} onChange={(arrangement) => edit({ arrangement })} />

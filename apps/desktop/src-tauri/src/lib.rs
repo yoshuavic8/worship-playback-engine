@@ -14,6 +14,7 @@ pub mod keys;
 pub mod library;
 pub mod logs;
 pub mod midi;
+pub mod transpose;
 pub mod models;
 pub mod ollama_install;
 pub mod paths;
@@ -125,6 +126,9 @@ pub fn run() {
             commands::midi_apply_preset,
             commands::midi_key,
             commands::audio_set_level,
+            commands::song_set_transpose,
+            commands::transpose_prepare,
+            commands::transpose_jobs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Worship Playback Engine");

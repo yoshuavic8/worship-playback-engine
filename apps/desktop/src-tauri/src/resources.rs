@@ -554,6 +554,17 @@ fn failure_output(output: &str) -> String {
     format!("\n{}", details.chars().take(1200).collect::<String>())
 }
 
+/// Re-run `uv sync` on an existing install (adds dependencies new in this version).
+pub fn sync_python_env(ctx: &Ctx) -> Result<()> {
+    let uv = find_tool("uv").ok_or_else(|| anyhow!("Bundled uv sidecar not found. Reinstall the app."))?;
+    if ENV_BUSY.swap(true, Ordering::SeqCst) {
+        return Err(anyhow!("The Python environment is already being updated"));
+    }
+    let r = run_uv_python_and_sync(ctx, &uv, &|_, _, _| {});
+    ENV_BUSY.store(false, Ordering::SeqCst);
+    r
+}
+
 /// Synchronous engine install (used by setup wizard).
 pub fn install_python_env_sync(ctx: Arc<Ctx>) -> Result<()> {
     let uv = find_tool("uv").ok_or_else(|| {

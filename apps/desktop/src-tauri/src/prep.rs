@@ -422,6 +422,8 @@ fn apply_result(ctx: &Ctx, song_id: &str, opts: &PrepOptions, r: &WorkerResult) 
     let dir = Path::new(&song.dir).to_path_buf();
     let exists = |p: &Option<String>| p.as_ref().filter(|rel| dir.join(rel).is_file()).cloned();
     if opts.separate {
+        // New stems: every cached key is stale.
+        crate::transpose::clear(&song);
         song.stems = StemPaths {
             vocals: exists(&r.stems.vocals),
             drums: exists(&r.stems.drums),

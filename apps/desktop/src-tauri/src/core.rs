@@ -30,6 +30,7 @@ pub struct Ctx {
     pub queue: PrepQueue,
     pub resources: ResourceManager,
     pub midi: crate::midi::MidiHub,
+    pub transpose: crate::transpose::TransposeQueue,
     pub worker_dir: PathBuf,
     me: OnceLock<Weak<Ctx>>,
 }
@@ -80,6 +81,7 @@ pub fn init(app: AppHandle, root: PathBuf, resource_dir: Option<PathBuf>) -> Res
         queue: PrepQueue::new(),
         resources: ResourceManager::new(),
         midi: crate::midi::MidiHub::new(),
+        transpose: crate::transpose::TransposeQueue::default(),
         worker_dir,
         me: OnceLock::new(),
     });
@@ -90,6 +92,7 @@ pub fn init(app: AppHandle, root: PathBuf, resource_dir: Option<PathBuf>) -> Res
     ctx.queue.start(ctx.clone());
     crate::player::spawn_poller(ctx.clone());
     ctx.midi.start(ctx.clone());
+    ctx.transpose.start(ctx.clone());
     Ok(ctx)
 }
 
