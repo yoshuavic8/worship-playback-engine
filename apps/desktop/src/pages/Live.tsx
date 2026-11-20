@@ -19,7 +19,7 @@ import { semitoneLabel, transposedKey } from "@/lib/transpose";
 import { sectionColor } from "@/lib/sections";
 import { DEFAULT_SHORTCUTS, keyLabel } from "@/lib/shortcuts";
 import {
-  fadeOut, gotoSong, isRolling, jumpTo, stepSong, stop, toggleClick, toggleCue, toggleLoop, togglePlay,
+  fadeOut, gotoSong, isRolling, jumpTo, stepSong, stop, toggleClick, toggleCue, togglePlay, vampPress, vampRelease,
 } from "@/lib/transport";
 import type { LiveInfo, MidiTarget, TrackInfo, TrackRole } from "@/lib/types";
 import { useApp, usePlayback } from "@/store/app";
@@ -310,7 +310,7 @@ function LiveView({ live }: { live: LiveInfo }) {
             <Mappable target={{ type: "nextSong" }} className="rounded-full"><LiveBtn label={`Next song (${keyLabel(shortcuts.nextSong)})`} onClick={() => stepSong(1)} disabled={!next || rolling}><SkipForward className="size-6" fill="currentColor" /></LiveBtn></Mappable>
           </div>
           <div className="mt-5 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-faint">
-            {([["playPause", "Play/Pause"], ["prevSection", "Prev section"], ["nextSection", "Next section"], ["loopSection", "Loop"], ["toggleClick", "Click"], ["panic", "PANIC"]] as const).map(([k, l]) => (
+            {([["playPause", "Play/Pause"], ["prevSection", "Prev section"], ["nextSection", "Next section"], ["loopSection", "Vamp (hold)"], ["toggleClick", "Click"], ["panic", "PANIC"]] as const).map(([k, l]) => (
               <span key={k} className="flex items-center gap-1.5"><span className="kbd">{keyLabel(shortcuts[k])}</span>{l}</span>
             ))}
           </div>
@@ -329,7 +329,7 @@ function LiveView({ live }: { live: LiveInfo }) {
           </div>
           <div>
             <div className="label mb-2">Section</div>
-            <Mappable target={{ type: "vamp" }} className="rounded-xl"><MonToggle icon={<Repeat className="size-5" />} label="Loop section" on={!!status?.looping} onClick={toggleLoop} tone="foh" /></Mappable>
+            <Mappable target={{ type: "vamp" }} className="rounded-xl"><VampButton on={!!status?.looping} /></Mappable>
           </div>
           <Levels />
           {!!loaded?.tracks.length && <LiveMixer tracks={loaded.tracks} />}
@@ -484,6 +484,27 @@ function MonToggle({ icon, label, on, onClick, disabled, hint, tone = "mon" }: {
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold">{label}</div>
         {hint && <div className="text-[0.7rem] text-muted">{hint}</div>}
+      </div>
+      <span className="text-xs font-black tracking-wider">{on ? "ON" : "OFF"}</span>
+    </button>
+  );
+}
+
+/** Tap: vamp on/off. Hold: vamp until released. Same rule for a mapped pad (momentary) or the L key. */
+function VampButton({ on }: { on: boolean }) {
+  return (
+    <button
+      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); vampPress(); }}
+      onPointerUp={vampRelease}
+      onPointerCancel={vampRelease}
+      onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); e.stopPropagation(); vampPress(); } }}
+      onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); vampRelease(); } }}
+      className={cn("flex h-14 w-full select-none items-center gap-3 rounded-xl border px-4 text-left transition-colors",
+        on ? "border-accent/50 bg-accent/12 text-accent" : "border-line bg-panel text-fg-2 hover:border-line-2")}>
+      <Repeat className="size-5" />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold">Vamp</div>
+        <div className="text-[0.7rem] text-muted">{on ? "Looping this section" : "Tap to loop · hold to loop until released"}</div>
       </div>
       <span className="text-xs font-black tracking-wider">{on ? "ON" : "OFF"}</span>
     </button>

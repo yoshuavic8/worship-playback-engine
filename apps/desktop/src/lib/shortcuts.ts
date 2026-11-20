@@ -7,7 +7,7 @@ export const SHORTCUT_ACTIONS: { id: string; label: string; live?: boolean }[] =
   { id: "fadeOut", label: "Fade out" },
   { id: "nextSection", label: "Queue next section" },
   { id: "prevSection", label: "Queue previous section" },
-  { id: "loopSection", label: "Loop current section" },
+  { id: "loopSection", label: "Vamp (tap or hold)" },
   { id: "nextSong", label: "Next song" },
   { id: "prevSong", label: "Previous song" },
   { id: "toggleClick", label: "Click on / off" },

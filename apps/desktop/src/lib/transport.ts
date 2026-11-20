@@ -84,6 +84,32 @@ export function jumpTo(index: number, bar = false) {
 
 export const toggleLoop = () => guard(ipc.loop(!st()?.looping));
 
+/** Hold longer than this = vamp only while held; shorter = tap toggles. */
+export const VAMP_HOLD_MS = 400;
+
+/**
+ * Vamp (loop the current section) with tap-or-hold:
+ * tap = on/off, hold = loop until released (then the song carries on at the section end).
+ */
+export function vampDecision(wasOn: boolean, heldMs: number): { onPress: boolean; onRelease: boolean } {
+  const held = heldMs >= VAMP_HOLD_MS;
+  return { onPress: true, onRelease: held ? false : !wasOn };
+}
+
+let vampDown: { at: number; wasOn: boolean } | null = null;
+export function vampPress() {
+  if (vampDown) return;
+  const wasOn = !!st()?.looping;
+  vampDown = { at: performance.now(), wasOn };
+  if (!wasOn) void guard(ipc.loop(true));
+}
+export function vampRelease() {
+  if (!vampDown) return;
+  const { onRelease } = vampDecision(vampDown.wasOn, performance.now() - vampDown.at);
+  vampDown = null;
+  if (onRelease !== !!st()?.looping) void guard(ipc.loop(onRelease));
+}
+
 export function toggleClick() {
   const l = loaded();
   if (!l) return;

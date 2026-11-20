@@ -4,7 +4,7 @@ import { useApp } from "@/store/app";
 import { ipc } from "./ipc";
 import { isKeyMapped, useMidi } from "./midi";
 import { DEFAULT_SHORTCUTS, isTyping, keyLabel, matchShortcut } from "./shortcuts";
-import { ACTIONS, panicStop } from "./transport";
+import { ACTIONS, panicStop, vampPress, vampRelease } from "./transport";
 
 /**
  * Global transport shortcuts. PANIC always works, even while typing.
@@ -53,6 +53,12 @@ export function useShortcuts() {
         }
         return;
       }
+      if (action === "loopSection") {
+        // Tap toggles the vamp, hold loops only until the key is released.
+        e.preventDefault();
+        vampPress();
+        return;
+      }
       const fn = ACTIONS[action];
       if (fn) {
         e.preventDefault();
@@ -60,6 +66,7 @@ export function useShortcuts() {
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
+      if (map.loopSection && e.code === map.loopSection) vampRelease();
       if (isTyping(e) || modified(e)) return;
       if (isKeyMapped(useMidi.getState().mappings, e.code, songId())) ipc.midiKey(e.code, false).catch(() => {});
     };
