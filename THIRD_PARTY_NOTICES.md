@@ -34,6 +34,7 @@ projects. Separation **models** are downloaded during Setup (not in the `.dmg`).
 | NumPy | BSD | https://github.com/numpy/numpy |
 | SciPy | BSD | https://github.com/scipy/scipy |
 | ONNX Runtime | MIT | https://github.com/microsoft/onnxruntime |
+| Signalsmith Stretch (via python-stretch) | MIT | https://github.com/Signalsmith-Audio/signalsmith-stretch — https://github.com/gaspardpetit/python-stretch |
 
 ## Optional models (Setup download)
 
@@ -48,5 +49,6 @@ projects. Separation **models** are downloaded during Setup (not in the `.dmg`).
 | Component | License | Source |
 |---|---|---|
 | Ollama | MIT | https://github.com/ollama/ollama — https://ollama.com/download |
+| FreeLLMAPI (or any OpenAI-compatible server) | — (user-run, not bundled) | Configured in Settings → AI |
 
 This application never bundles copyrighted songs. Users supply their own audio.
