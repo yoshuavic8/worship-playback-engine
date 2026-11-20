@@ -168,6 +168,8 @@ export interface AudioSettings {
   cueVolumeDb: number;
   monitorBackingDb: number;
   clickSound: string;
+  /** FOH master (congregation mix). */
+  fohMasterDb?: number;
 }
 
 export interface AppSettings {
@@ -259,6 +261,8 @@ export interface TrackInfo {
   role: TrackRole;
   gainDb: number;
   muted: boolean;
+  /** When any track is soloed, only soloed tracks are heard. */
+  solo?: boolean;
   toFoh: boolean;
   toMon: boolean;
 }
@@ -492,3 +496,58 @@ export interface Waveform {
   rms: number[];
 }
 
+
+// ---------------- MIDI / keyboard mapping ----------------
+
+export type SourceKind = "note" | "cc" | "pc" | "key";
+
+export interface MidiSource {
+  kind: SourceKind;
+  /** 0..15, shown as 1..16 */
+  channel: number;
+  number: number;
+  key?: string;
+  device?: string;
+}
+
+export type MidiTarget =
+  | { type: "sectionSlot"; slot: number }
+  | { type: "songSection"; sectionId: string; label: string }
+  | { type: "playPause" } | { type: "stop" } | { type: "fadeOut" }
+  | { type: "nextSong" } | { type: "prevSong" } | { type: "nextSection" } | { type: "prevSection" } | { type: "cancelJump" }
+  | { type: "vamp" } | { type: "toggleClick" } | { type: "toggleCue" }
+  | { type: "transposeUp" } | { type: "transposeDown" }
+  | { type: "masterVolume" } | { type: "clickVolume" } | { type: "cueVolume" }
+  | { type: "trackVolume"; role: TrackRole } | { type: "trackMute"; role: TrackRole } | { type: "trackSolo"; role: TrackRole };
+
+export type ButtonMode = "trigger" | "toggle" | "momentary";
+export type EncoderMode = "absolute" | "relative1" | "relative2" | "relative3";
+
+export interface MidiMapping {
+  id: string;
+  songId: string | null;
+  source: MidiSource;
+  target: MidiTarget;
+  mode: ButtonMode;
+  encoder: EncoderMode;
+  min: number;
+  max: number;
+  createdAt: string;
+}
+
+export interface MidiStatus {
+  devices: string[];
+  armed: { target: MidiTarget; songId: string | null } | null;
+  available: boolean;
+  error: string | null;
+}
+
+export interface MidiActivity {
+  device: string | null;
+  kind: SourceKind;
+  channel: number;
+  number: number;
+  value: number;
+  key: string | null;
+  mapped: boolean;
+}

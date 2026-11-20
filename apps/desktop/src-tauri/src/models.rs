@@ -393,6 +393,9 @@ pub struct AudioSettings {
     pub cue_volume_db: f32,
     pub monitor_backing_db: f32,
     pub click_sound: String,
+    /// FOH master (congregation mix). Click and cues never reach FOH.
+    #[serde(default)]
+    pub foh_master_db: f32,
 }
 
 impl Default for AudioSettings {
@@ -406,6 +409,7 @@ impl Default for AudioSettings {
             cue_volume_db: -3.0,
             monitor_backing_db: -6.0,
             click_sound: "classic".into(),
+            foh_master_db: 0.0,
         }
     }
 }

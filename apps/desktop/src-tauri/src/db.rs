@@ -130,6 +130,21 @@ const MIGRATIONS: &[&str] = &[
         value_json TEXT NOT NULL
     );
     "#,
+    // v2 — MIDI / keyboard mappings (v0.3.0). song_id NULL = global.
+    r#"
+    CREATE TABLE IF NOT EXISTS midi_mappings (
+        id TEXT PRIMARY KEY,
+        song_id TEXT REFERENCES songs(id) ON DELETE CASCADE,
+        source_json TEXT NOT NULL,
+        target_json TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'trigger',
+        encoder TEXT NOT NULL DEFAULT 'absolute',
+        min_value REAL NOT NULL DEFAULT 0,
+        max_value REAL NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_midi_song ON midi_mappings(song_id);
+    "#,
 ];
 
 pub struct Db {
@@ -625,6 +640,77 @@ impl Db {
     }
 
     /// Jobs left running when the app quit can never finish; mark them failed on startup.
+    // ---------- MIDI mappings ----------
+
+    pub fn list_midi_mappings(&self) -> Result<Vec<crate::midi::mapping::Mapping>> {
+        use crate::midi::mapping::Mapping;
+        let c = self.conn.lock();
+        let mut stmt = c.prepare(
+            "SELECT id, song_id, source_json, target_json, mode, encoder, min_value, max_value, created_at
+             FROM midi_mappings ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, f64>(6)?,
+                r.get::<_, f64>(7)?,
+                r.get::<_, String>(8)?,
+            ))
+        })?;
+        let mut out = vec![];
+        for row in rows {
+            let (id, song_id, src, tgt, mode, enc, min, max, created_at) = row?;
+            // A mapping written by a newer version that this build does not understand is skipped.
+            let (Ok(source), Ok(target)) = (serde_json::from_str(&src), serde_json::from_str(&tgt)) else { continue };
+            out.push(Mapping {
+                id,
+                song_id,
+                source,
+                target,
+                mode: serde_json::from_value(serde_json::Value::String(mode)).unwrap_or_default(),
+                encoder: serde_json::from_value(serde_json::Value::String(enc)).unwrap_or_default(),
+                min: min as f32,
+                max: max as f32,
+                created_at,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn save_midi_mapping(&self, m: &crate::midi::mapping::Mapping) -> Result<()> {
+        let enum_str = |v: serde_json::Value| v.as_str().unwrap_or_default().to_string();
+        let c = self.conn.lock();
+        c.execute(
+            "INSERT INTO midi_mappings (id, song_id, source_json, target_json, mode, encoder, min_value, max_value, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(id) DO UPDATE SET song_id=excluded.song_id, source_json=excluded.source_json,
+                target_json=excluded.target_json, mode=excluded.mode, encoder=excluded.encoder,
+                min_value=excluded.min_value, max_value=excluded.max_value",
+            params![
+                m.id,
+                m.song_id,
+                serde_json::to_string(&m.source)?,
+                serde_json::to_string(&m.target)?,
+                enum_str(serde_json::to_value(m.mode)?),
+                enum_str(serde_json::to_value(m.encoder)?),
+                m.min as f64,
+                m.max as f64,
+                if m.created_at.is_empty() { now_iso() } else { m.created_at.clone() },
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_midi_mapping(&self, id: &str) -> Result<()> {
+        self.conn.lock().execute("DELETE FROM midi_mappings WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn recover_interrupted_jobs(&self) -> Result<()> {
         let c = self.conn.lock();
         c.execute(
@@ -858,6 +944,55 @@ mod tests {
         // deleting a song removes it from setlists
         db.delete_song("a").unwrap();
         assert_eq!(db.get_setlist("sl").unwrap().unwrap().items.len(), 2);
+    }
+
+    #[test]
+    fn upgrade_from_v1_keeps_data_and_adds_mappings() {
+        // A v0.2 database: only the first migration has run.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("BEGIN; {}; PRAGMA user_version = 1; COMMIT;", MIGRATIONS[0])).unwrap();
+        conn.execute("INSERT INTO settings (key, value_json) VALUES ('app', '{}')", []).unwrap();
+        let db = Db::init(conn).unwrap();
+        assert_eq!(schema_version(&db), MIGRATIONS.len() as i64);
+        assert!(db.get_setting::<serde_json::Value>("app").is_some(), "existing settings survive");
+        assert!(db.list_midi_mappings().unwrap().is_empty());
+    }
+
+    #[test]
+    fn midi_mappings_roundtrip_and_cascade() {
+        use crate::midi::mapping::{ButtonMode, Mapping, Source, Target};
+        use crate::midi::msg::{Encoder, SourceKind};
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_song(&sample_song("a")).unwrap();
+        let src = Source { kind: SourceKind::Cc, channel: 0, number: 112, key: None, device: Some("MiniLab".into()) };
+        let knob = Mapping {
+            id: "m1".into(),
+            song_id: None,
+            source: src.clone(),
+            target: Target::MasterVolume,
+            mode: ButtonMode::Trigger,
+            encoder: Encoder::Relative1,
+            min: 0.2,
+            max: 0.9,
+            created_at: now_iso(),
+        };
+        let pad = Mapping {
+            id: "m2".into(),
+            song_id: Some("a".into()),
+            target: Target::SongSection { section_id: "a-s2".into(), label: "Verse 1".into() },
+            ..knob.clone()
+        };
+        db.save_midi_mapping(&knob).unwrap();
+        db.save_midi_mapping(&pad).unwrap();
+        let back = db.list_midi_mappings().unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0], knob);
+        assert_eq!(back[1].target, pad.target);
+        // Deleting the song removes its per-song mappings but keeps global ones.
+        db.delete_song("a").unwrap();
+        let back = db.list_midi_mappings().unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].id, "m1");
     }
 
     #[test]

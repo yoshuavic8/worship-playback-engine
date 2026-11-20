@@ -173,6 +173,7 @@ pub async fn save_audio_settings(ctx: S<'_>, audio: AudioSettings) -> R<AudioSta
         audio.click_volume_db = audio.click_volume_db.clamp(-60.0, 6.0);
         audio.cue_volume_db = audio.cue_volume_db.clamp(-60.0, 6.0);
         audio.monitor_backing_db = audio.monitor_backing_db.clamp(-60.0, 6.0);
+        audio.foh_master_db = audio.foh_master_db.clamp(-60.0, 6.0);
         let old = ctx.audio.read().clone();
         let reopen = old.device_name != audio.device_name
             || old.sample_rate != audio.sample_rate
@@ -807,6 +808,10 @@ pub fn player_set_track(ctx: S, role: TrackRole, gain_db: f32, muted: bool) {
     ctx.player.set_track(&ctx, role, gain_db.clamp(-60.0, 6.0), muted)
 }
 #[tauri::command]
+pub fn player_set_solo(ctx: S, role: TrackRole, solo: bool) {
+    ctx.player.set_track_solo(&ctx, role, solo)
+}
+#[tauri::command]
 pub fn player_set_click(ctx: S, enabled: bool) {
     ctx.player.set_click(&ctx, enabled)
 }
@@ -1119,4 +1124,58 @@ pub fn import_library(ctx: S, path: String) -> R<LibraryImportResult> {
     let _ = tauri::Emitter::emit(&ctx.app, "library:changed", ());
     let _ = tauri::Emitter::emit(&ctx.app, "setlists:changed", ());
     Ok(LibraryImportResult { songs, skipped_songs: skipped, setlists, presets })
+}
+
+// ---------------- MIDI / keyboard mapping ----------------
+
+#[tauri::command]
+pub fn midi_status(ctx: S) -> crate::midi::MidiStatus {
+    ctx.midi.status()
+}
+
+#[tauri::command]
+pub fn midi_mappings(ctx: S) -> Vec<crate::midi::mapping::Mapping> {
+    ctx.midi.mappings()
+}
+
+/// Arm Learn for one control (None = stop waiting). The next MIDI message or mapped key wins.
+#[tauri::command]
+pub fn midi_learn_arm(ctx: S, target: Option<crate::midi::mapping::Target>, song_id: Option<String>) {
+    ctx.midi.arm(target.map(|target| crate::midi::LearnArm { target, song_id }));
+}
+
+#[tauri::command]
+pub fn midi_save_mapping(ctx: S, mapping: crate::midi::mapping::Mapping) -> R<crate::midi::mapping::Mapping> {
+    ctx.midi.save(&ctx, mapping).map_err(e)
+}
+
+#[tauri::command]
+pub fn midi_delete_mapping(ctx: S, id: String) -> R<()> {
+    ctx.midi.delete(&ctx, &id).map_err(e)
+}
+
+#[tauri::command]
+pub fn midi_clear(ctx: S, scope: String) -> R<usize> {
+    ctx.midi.clear(&ctx, &scope).map_err(e)
+}
+
+#[tauri::command]
+pub fn midi_apply_preset(ctx: S, name: String) -> R<usize> {
+    ctx.midi.apply_preset(&ctx, &name).map_err(e)
+}
+
+/// Computer keyboard as a learnable source.
+#[tauri::command]
+pub fn midi_key(ctx: S, code: String, pressed: bool) {
+    if code.len() <= 32 {
+        ctx.midi.key(&code, pressed);
+    }
+}
+
+/// FOH master, click or cue level (dB). Saved shortly after the last change.
+#[tauri::command]
+pub fn audio_set_level(ctx: S, kind: String, db: f32) {
+    if db.is_finite() {
+        crate::midi::set_audio_level(&ctx, &kind, db);
+    }
 }

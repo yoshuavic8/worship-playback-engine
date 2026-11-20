@@ -62,6 +62,7 @@ export const ipc = {
   cancelJump: () => call<void>("player_cancel_jump"),
   loop: (on: boolean) => call<void>("player_loop", { on }),
   setTrack: (role: T.TrackRole, gainDb: number, muted: boolean) => call<void>("player_set_track", { role, gainDb, muted }),
+  setSolo: (role: T.TrackRole, solo: boolean) => call<void>("player_set_solo", { role, solo }),
   setClick: (enabled: boolean) => call<void>("player_set_click", { enabled }),
   setCue: (enabled: boolean) => call<void>("player_set_cue", { enabled }),
   loaded: () => call<T.LoadedInfo | null>("player_loaded"),
@@ -95,6 +96,17 @@ export const ipc = {
   aiWarmup: () => call<void>("ai_warmup"),
   aiSong: (songId: string, text: string) => call<T.AiProposal>("ai_song_command", { songId, text }),
   aiSetlist: (text: string) => call<T.AiProposal>("ai_setlist_command", { text }),
+
+  // MIDI / keyboard mapping
+  midiStatus: () => call<T.MidiStatus>("midi_status"),
+  midiMappings: () => call<T.MidiMapping[]>("midi_mappings"),
+  midiLearnArm: (target: T.MidiTarget | null, songId: string | null = null) => call<void>("midi_learn_arm", { target, songId }),
+  midiSaveMapping: (mapping: T.MidiMapping) => call<T.MidiMapping>("midi_save_mapping", { mapping }),
+  midiDeleteMapping: (id: string) => call<void>("midi_delete_mapping", { id }),
+  midiClear: (scope: "all" | "global" | `song:${string}`) => call<number>("midi_clear", { scope }),
+  midiApplyPreset: (name: "minilab-mk2") => call<number>("midi_apply_preset", { name }),
+  midiKey: (code: string, pressed: boolean) => call<void>("midi_key", { code, pressed }),
+  setLevel: (kind: "master" | "click" | "cue", db: number) => call<void>("audio_set_level", { kind, db }),
 
   // backup
   exportLibrary: (path: string) => call<number>("export_library", { path }),

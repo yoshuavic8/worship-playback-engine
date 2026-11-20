@@ -1,6 +1,7 @@
-import { Bot, Check, FolderOpen, Keyboard, Loader2, Play, RotateCcw, Upload, Download, X } from "lucide-react";
+import { Bot, Cable, Check, FolderOpen, Keyboard, Loader2, Play, RotateCcw, Upload, Download, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { MappingList, MidiDevices, PresetActions } from "@/components/MidiPanel";
 import { Badge, Button, Card, PageHeader, Row, Segmented, Switch } from "@/components/ui";
 import { openDialog, pickFolder, saveDialog } from "@/lib/actions";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -145,7 +146,16 @@ export function Settings() {
                   onChange={(code) => save({ shortcuts: { ...shortcuts, [a.id]: code } })} />
               ))}
             </div>
-            <p className="mt-3 text-xs text-muted">PANIC always works, even while typing. With a dialog open, use Shift+Esc.</p>
+            <p className="mt-3 text-xs text-muted">PANIC always works, even while typing. With a dialog open, use Shift+Esc. Section jumps use MIDI Learn (pads or any key) instead of fixed number keys.</p>
+          </Card>
+
+          <Card title={<span className="flex items-center gap-2"><Cable className="size-4 text-muted" />MIDI controllers</span>}
+            subtitle="Map pads, knobs and keys with MIDI Learn on the Live page">
+            <div className="space-y-4">
+              <MidiDevices />
+              <MappingList emptyHint="No mappings yet. Open Live, press MIDI Learn, click a control, then press a pad or key." />
+              <PresetActions />
+            </div>
           </Card>
         </div>
 

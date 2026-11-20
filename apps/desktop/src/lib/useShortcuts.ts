@@ -1,17 +1,41 @@
 import { useEffect } from "react";
+import { toast } from "sonner";
 import { useApp } from "@/store/app";
-import { DEFAULT_SHORTCUTS, isTyping, matchShortcut } from "./shortcuts";
-import { ACTIONS, jumpTo, panicStop } from "./transport";
+import { ipc } from "./ipc";
+import { isKeyMapped, useMidi } from "./midi";
+import { DEFAULT_SHORTCUTS, isTyping, keyLabel, matchShortcut } from "./shortcuts";
+import { ACTIONS, panicStop } from "./transport";
 
-/** Global transport shortcuts. PANIC always works, even while typing. */
+/**
+ * Global transport shortcuts. PANIC always works, even while typing.
+ * Other keys have no hardcoded meaning: they can be mapped through MIDI Learn
+ * (click a control, press a key) and are then forwarded to the mapping engine.
+ */
 export function useShortcuts() {
   const shortcuts = useApp((s) => s.settings?.shortcuts);
   useEffect(() => {
     const map = { ...DEFAULT_SHORTCUTS, ...(shortcuts ?? {}) };
+    const songId = () => useApp.getState().loaded?.songId ?? null;
+    const modified = (e: KeyboardEvent) => e.metaKey || e.ctrlKey || e.altKey;
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (document.querySelector("[data-capturing-shortcut]")) return;
       const action = matchShortcut(e, map);
+      const midi = useMidi.getState();
+
+      // Learn armed: the next plain key becomes the mapping (Esc cancels).
+      if (midi.armed && !isTyping(e) && !modified(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.code === "Escape") return midi.disarm();
+        if (action) {
+          toast.warning(`${keyLabel(e.code)} is already a shortcut`, { description: "Pick another key, or change shortcuts in Settings." });
+          return;
+        }
+        ipc.midiKey(e.code, true).catch(() => {});
+        return;
+      }
+
       if (action === "panic") {
         const onLive = useApp.getState().route.page === "live";
         // Esc = PANIC only on Live. Elsewhere use Shift+Esc (or the PANIC button).
@@ -23,15 +47,9 @@ export function useShortcuts() {
       }
       if (isTyping(e) || document.querySelector("[role=dialog]")) return;
       if (!action) {
-        // Keys 1–9 jump to that section (same rule as tapping: once = end of part, twice = end of bar).
-        const m = /^Digit([1-9])$/.exec(e.code);
-        const segs = useApp.getState().loaded?.segments;
-        if (m && segs && !e.metaKey && !e.ctrlKey && !e.altKey) {
-          const i = Number(m[1]) - 1;
-          if (i < segs.length) {
-            e.preventDefault();
-            jumpTo(i);
-          }
+        if (!modified(e) && isKeyMapped(midi.mappings, e.code, songId())) {
+          e.preventDefault();
+          ipc.midiKey(e.code, true).catch(() => {});
         }
         return;
       }
@@ -41,7 +59,15 @@ export function useShortcuts() {
         fn();
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isTyping(e) || modified(e)) return;
+      if (isKeyMapped(useMidi.getState().mappings, e.code, songId())) ipc.midiKey(e.code, false).catch(() => {});
+    };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
   }, [shortcuts]);
 }

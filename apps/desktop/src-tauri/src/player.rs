@@ -34,6 +34,8 @@ pub struct TrackInfo {
     pub role: TrackRole,
     pub gain_db: f32,
     pub muted: bool,
+    /// Solo: when any track is soloed, only soloed tracks are heard.
+    pub solo: bool,
     pub to_foh: bool,
     pub to_mon: bool,
 }
@@ -337,7 +339,7 @@ impl Player {
         let mut tracks: Vec<Track> = vec![];
         let mut infos: Vec<TrackInfo> = vec![];
         let push = |t: Track, gain_db: f32, tracks: &mut Vec<Track>, infos: &mut Vec<TrackInfo>| {
-            infos.push(TrackInfo { role: t.role, gain_db, muted: t.muted, to_foh: t.to_foh, to_mon: t.to_mon });
+            infos.push(TrackInfo { role: t.role, gain_db, muted: t.muted, solo: false, to_foh: t.to_foh, to_mon: t.to_mon });
             tracks.push(t);
         };
         let mut source = String::new();
@@ -579,6 +581,17 @@ impl Player {
         Ok(())
     }
 
+    /// Play / pause like the big Live button: count-in only when starting from the top.
+    pub fn toggle_smart(&self, ctx: &Ctx) -> Result<()> {
+        let Some(l) = self.loaded() else { return Ok(()) };
+        let s = self.status(ctx);
+        if matches!(s.state, PlaybackState::Playing | PlaybackState::CountIn) {
+            return self.pause(ctx);
+        }
+        let from_top = s.position < 0.05 || matches!(s.state, PlaybackState::Stopped | PlaybackState::Ready);
+        self.play(ctx, from_top && l.count_in_bars > 0 && l.click_available)
+    }
+
     pub fn toggle(&self, ctx: &Ctx, count_in: bool) -> Result<()> {
         match self.effective_state(ctx) {
             PlaybackState::Playing | PlaybackState::CountIn => self.pause(ctx),
@@ -625,12 +638,45 @@ impl Player {
     }
 
     pub fn set_track(&self, ctx: &Ctx, role: TrackRole, gain_db: f32, muted: bool) {
-        ctx.engine.send(MixerCmd::SetTrack { role, gain: db_to_gain(gain_db), muted });
-        if let Some(l) = self.inner.lock().loaded.as_mut() {
+        self.edit_track(ctx, role, |t| {
+            t.gain_db = gain_db;
+            t.muted = muted;
+        });
+    }
+
+    pub fn set_track_level(&self, ctx: &Ctx, role: TrackRole, gain_db: f32) {
+        self.edit_track(ctx, role, |t| t.gain_db = gain_db.clamp(-60.0, 12.0));
+    }
+
+    pub fn set_track_mute(&self, ctx: &Ctx, role: TrackRole, muted: bool) {
+        self.edit_track(ctx, role, |t| t.muted = muted);
+    }
+
+    pub fn set_track_solo(&self, ctx: &Ctx, role: TrackRole, solo: bool) {
+        self.edit_track(ctx, role, |t| t.solo = solo);
+    }
+
+    fn edit_track(&self, ctx: &Ctx, role: TrackRole, f: impl Fn(&mut TrackInfo)) {
+        let tracks = {
+            let mut i = self.inner.lock();
+            let Some(l) = i.loaded.as_mut() else { return };
             for t in l.tracks.iter_mut().filter(|t| t.role == role) {
-                t.gain_db = gain_db;
-                t.muted = muted;
+                f(t);
             }
+            l.tracks.clone()
+        };
+        // Solo: when any track is soloed, every other track is silent (mute still wins).
+        let any_solo = tracks.iter().any(|t| t.solo);
+        for t in &tracks {
+            let muted = t.muted || (any_solo && !t.solo);
+            ctx.engine.send(MixerCmd::SetTrack { role: t.role, gain: db_to_gain(t.gain_db), muted });
+        }
+    }
+
+    /// Tell the UI that levels / mutes / click / cue changed outside of it (MIDI, keys).
+    pub fn emit_mix(&self, ctx: &Ctx) {
+        if let Some(info) = self.loaded() {
+            let _ = ctx.app.emit("playback:mixChanged", &info);
         }
     }
 

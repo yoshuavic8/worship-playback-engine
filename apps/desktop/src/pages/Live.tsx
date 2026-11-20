@@ -1,22 +1,25 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  AlertTriangle, ArrowLeft, ListMusic, Loader2, Maximize2, Mic, Minimize2, Pause, Play, Radio, Repeat,
+  AlertTriangle, ArrowLeft, Cable, ListMusic, Loader2, Maximize2, Mic, Minimize2, Pause, Play, Radio, Repeat,
   SkipBack, SkipForward, Square, Volume1,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Metronome } from "@/components/icons";
+import { Mappable } from "@/components/Mappable";
+import { LearnDrawer } from "@/components/MidiPanel";
 import { KeyBpm } from "@/components/SongBits";
 import { PanicButton, StateBadge, planLen, planPos, segOffset } from "@/components/Transport";
 import { Badge, Button, Meter, Slider, StatusDot, Tip } from "@/components/ui";
 import { cn, fmtDate, fmtDb, fmtTime } from "@/lib/format";
 import { errMsg, ipc } from "@/lib/ipc";
+import { TRACK_LABEL, useMidi } from "@/lib/midi";
 import { sectionColor } from "@/lib/sections";
 import { DEFAULT_SHORTCUTS, keyLabel } from "@/lib/shortcuts";
 import {
   fadeOut, gotoSong, isRolling, jumpTo, stepSong, stop, toggleClick, toggleCue, toggleLoop, togglePlay,
 } from "@/lib/transport";
-import type { LiveInfo, TrackInfo, TrackRole } from "@/lib/types";
+import type { LiveInfo, MidiTarget, TrackInfo, TrackRole } from "@/lib/types";
 import { useApp, usePlayback } from "@/store/app";
 
 export function Live() {
@@ -67,6 +70,12 @@ function LiveView({ live }: { live: LiveInfo }) {
   const status = usePlayback((s) => s.status);
   const [full, setFull] = useState(false);
   const [now, setNow] = useState(new Date());
+  const learn = useMidi((s) => s.learn);
+  const scope = useMidi((s) => s.sectionScope);
+  const mapCount = useMidi((s) => s.mappings.length);
+  const midiDevices = useMidi((s) => s.status?.devices.length ?? 0);
+  // Leaving Live turns Learn off.
+  useEffect(() => () => useMidi.getState().setLearn(false), []);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -128,6 +137,12 @@ function LiveView({ live }: { live: LiveInfo }) {
         </div>
         <Button size="sm" variant="danger" className="no-drag" icon={<Square className="size-3.5" fill="currentColor" />} onClick={confirmEndLive}>End live</Button>
         <div className="flex-1" />
+        <Tip label={learn ? "Finish mapping" : `Map pads, knobs or keys to controls · ${mapCount} mapped · ${midiDevices ? `${midiDevices} controller${midiDevices > 1 ? "s" : ""}` : "no controller"}`}>
+          <Button size="sm" variant={learn ? "primary" : "ghost"} className="no-drag" icon={<Cable className="size-4" />}
+            onClick={() => useMidi.getState().setLearn(!learn)}>
+            {learn ? "Done" : "MIDI Learn"}
+          </Button>
+        </Tip>
         <div className="no-drag flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-xs">
           <StatusDot tone={audio?.running ? "ok" : "err"} />
           <span className="text-fg-2">{audio?.running?.deviceName ?? "No device"}</span>
@@ -146,7 +161,7 @@ function LiveView({ live }: { live: LiveInfo }) {
 
       <div className="flex min-h-0 flex-1">
         {/* setlist */}
-        <aside className="flex w-[19rem] shrink-0 flex-col border-r border-line/70">
+        {!learn && <aside className="flex w-[19rem] shrink-0 flex-col border-r border-line/70">
           <div className="label flex items-center gap-2 px-5 pt-4 pb-2"><ListMusic className="size-3.5" />Running order</div>
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-3">
             {live.songs.map((s, i) => {
@@ -173,7 +188,7 @@ function LiveView({ live }: { live: LiveInfo }) {
               {live.setlist.notes && <div className="whitespace-pre-line text-muted">{live.setlist.notes}</div>}
             </div>
           )}
-        </aside>
+        </aside>}
 
         {/* stage */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-10 py-5">
@@ -238,7 +253,7 @@ function LiveView({ live }: { live: LiveInfo }) {
           {/* section timeline */}
           <div className="mt-5">
             <div className="mb-2 flex items-center justify-between text-xs text-muted">
-              <span>Tap a section (or key 1–9) once: switch when this part ends · <span className="text-fg-2">tap again</span>: switch at the end of this bar · third tap cancels</span>
+              <span>Tap a section (or a mapped pad) once: switch when this part ends · <span className="text-fg-2">tap again</span>: switch at the end of this bar · third tap cancels</span>
               {queuedIdx != null && <button className="text-mon hover:underline" onClick={() => ipc.cancelJump()}>Cancel jump</button>}
             </div>
             <div className="flex h-32 gap-2">
@@ -249,19 +264,22 @@ function LiveView({ live }: { live: LiveInfo }) {
                 const done = i < segIdx;
                 const color = sectionColor(s.kind);
                 const prog = cur ? Math.min(1, Math.max(0, (pos - s.start) / (s.end - s.start))) : done ? 1 : 0;
+                const target: MidiTarget = scope === "song" ? { type: "songSection", sectionId: s.sectionId, label: s.label } : { type: "sectionSlot", slot: i + 1 };
+                const flex = { flexGrow: w, flexBasis: 0 };
                 return (
-                  <button key={i} onClick={(e) => jumpTo(i, e.shiftKey)} title={`${s.label} · ${fmtTime(s.end - s.start)}`}
-                    style={{ flexGrow: w, flexBasis: 0, borderColor: cur || q ? color : "transparent" }}
-                    className={cn("relative min-w-[3.2rem] overflow-hidden rounded-xl border-2 bg-panel text-left transition-colors hover:bg-panel-2", q && (status?.queuedBar ? "animate-blink-fast" : "animate-pulse-soft"))}>
+                  <Mappable key={i} target={target} perSong={scope === "song"} className="flex min-w-[3.2rem] rounded-xl" style={flex}>
+                  <button onClick={(e) => jumpTo(i, e.shiftKey)} title={`${s.label} · ${fmtTime(s.end - s.start)}`}
+                    style={{ ...flex, borderColor: cur || q ? color : "transparent" }}
+                    className={cn("relative h-full min-w-[3.2rem] overflow-hidden rounded-xl border-2 bg-panel text-left transition-colors hover:bg-panel-2", q && (status?.queuedBar ? "animate-blink-fast" : "animate-pulse-soft"))}>
                     <div className="absolute inset-y-0 left-0" style={{ width: `${prog * 100}%`, background: color, opacity: cur ? 0.28 : 0.1 }} />
                     <div className="absolute inset-x-0 top-0 h-1" style={{ background: color, opacity: cur ? 1 : 0.5 }} />
                     <div className="relative px-2.5 pt-3">
                       <div className={cn("truncate text-lg font-bold", !cur && "text-fg-2")} style={cur ? { color } : undefined}>{s.label}</div>
                       <div className="tnum truncate text-[0.7rem] text-muted">{fmtTime(segOffset(segs, i))}</div>
                     </div>
-                    {i < 9 && <div className="absolute top-2.5 right-2 text-[0.65rem] font-bold text-faint">{i + 1}</div>}
                     {q && <div className="absolute right-2 bottom-2 rounded bg-mon px-1.5 text-[0.62rem] font-black text-black">{status?.queuedBar ? "END OF BAR" : "END OF PART"}</div>}
                   </button>
+                  </Mappable>
                 );
               })}
             </div>
@@ -271,15 +289,17 @@ function LiveView({ live }: { live: LiveInfo }) {
 
           {/* transport */}
           <div className="mt-4 flex items-center justify-center gap-4">
-            <LiveBtn label={`Previous song (${keyLabel(shortcuts.prevSong)})`} onClick={() => stepSong(-1)} disabled={index === 0 || rolling}><SkipBack className="size-6" fill="currentColor" /></LiveBtn>
-            <LiveBtn label={`Stop (${keyLabel(shortcuts.stop)})`} onClick={stop}><Square className="size-6" fill="currentColor" /></LiveBtn>
+            <Mappable target={{ type: "prevSong" }} className="rounded-full"><LiveBtn label={`Previous song (${keyLabel(shortcuts.prevSong)})`} onClick={() => stepSong(-1)} disabled={index === 0 || rolling}><SkipBack className="size-6" fill="currentColor" /></LiveBtn></Mappable>
+            <Mappable target={{ type: "stop" }} className="rounded-full"><LiveBtn label={`Stop (${keyLabel(shortcuts.stop)})`} onClick={stop}><Square className="size-6" fill="currentColor" /></LiveBtn></Mappable>
+            <Mappable target={{ type: "playPause" }} className="rounded-full">
             <button onClick={togglePlay} aria-label="Play / Pause"
               className={cn("grid size-24 place-items-center rounded-full shadow-pop transition-transform active:scale-95",
                 rolling ? "bg-white text-black" : "bg-accent text-accent-ink hover:bg-accent-2")}>
               {rolling ? <Pause className="size-10" fill="currentColor" /> : <Play className="size-10 translate-x-1" fill="currentColor" />}
             </button>
-            <LiveBtn label={`Fade out (${keyLabel(shortcuts.fadeOut)})`} onClick={() => fadeOut()} disabled={!rolling}><Volume1 className="size-6" /></LiveBtn>
-            <LiveBtn label={`Next song (${keyLabel(shortcuts.nextSong)})`} onClick={() => stepSong(1)} disabled={!next || rolling}><SkipForward className="size-6" fill="currentColor" /></LiveBtn>
+            </Mappable>
+            <Mappable target={{ type: "fadeOut" }} className="rounded-full"><LiveBtn label={`Fade out (${keyLabel(shortcuts.fadeOut)})`} onClick={() => fadeOut()} disabled={!rolling}><Volume1 className="size-6" /></LiveBtn></Mappable>
+            <Mappable target={{ type: "nextSong" }} className="rounded-full"><LiveBtn label={`Next song (${keyLabel(shortcuts.nextSong)})`} onClick={() => stepSong(1)} disabled={!next || rolling}><SkipForward className="size-6" fill="currentColor" /></LiveBtn></Mappable>
           </div>
           <div className="mt-5 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs text-faint">
             {([["playPause", "Play/Pause"], ["prevSection", "Prev section"], ["nextSection", "Next section"], ["loopSection", "Loop"], ["toggleClick", "Click"], ["panic", "PANIC"]] as const).map(([k, l]) => (
@@ -293,16 +313,17 @@ function LiveView({ live }: { live: LiveInfo }) {
           <div>
             <div className="label mb-2">Monitor (in-ears)</div>
             <div className="space-y-2">
-              <MonToggle icon={<Metronome className="size-5" />} label="Click" on={!!loaded?.clickEnabled} disabled={!loaded?.clickAvailable} onClick={toggleClick}
-                hint={loaded?.clickAvailable ? undefined : "No BPM set"} />
-              <MonToggle icon={<Mic className="size-5" />} label="Voice cues" on={!!loaded?.cueEnabled} disabled={!loaded?.cueAvailable} onClick={toggleCue}
-                hint={loaded?.cueAvailable ? undefined : "No sections"} />
+              <Mappable target={{ type: "toggleClick" }} className="rounded-xl"><MonToggle icon={<Metronome className="size-5" />} label="Click" on={!!loaded?.clickEnabled} disabled={!loaded?.clickAvailable} onClick={toggleClick}
+                hint={loaded?.clickAvailable ? undefined : "No BPM set"} /></Mappable>
+              <Mappable target={{ type: "toggleCue" }} className="rounded-xl"><MonToggle icon={<Mic className="size-5" />} label="Voice cues" on={!!loaded?.cueEnabled} disabled={!loaded?.cueAvailable} onClick={toggleCue}
+                hint={loaded?.cueAvailable ? undefined : "No sections"} /></Mappable>
             </div>
           </div>
           <div>
             <div className="label mb-2">Section</div>
-            <MonToggle icon={<Repeat className="size-5" />} label="Loop section" on={!!status?.looping} onClick={toggleLoop} tone="foh" />
+            <Mappable target={{ type: "vamp" }} className="rounded-xl"><MonToggle icon={<Repeat className="size-5" />} label="Loop section" on={!!status?.looping} onClick={toggleLoop} tone="foh" /></Mappable>
           </div>
+          <Levels />
           {!!loaded?.tracks.length && <LiveMixer tracks={loaded.tracks} />}
           <div className="min-h-2 flex-1" />
           <div className="rounded-2xl border border-line bg-panel/60 p-4">
@@ -312,21 +333,48 @@ function LiveView({ live }: { live: LiveInfo }) {
             </div>
           </div>
         </aside>
+        {learn && <LearnDrawer />}
+      </div>
+    </div>
+  );
+}
+
+/** FOH master, click and cue levels (mappable to knobs). */
+function Levels() {
+  const audio = useApp((s) => s.audio);
+  if (!audio) return null;
+  const rows: { kind: "master" | "click" | "cue"; label: string; db: number; target: MidiTarget; tone: "accent" | "mon" }[] = [
+    { kind: "master", label: "FOH master", db: audio.fohMasterDb ?? 0, target: { type: "masterVolume" }, tone: "accent" },
+    { kind: "click", label: "Click", db: audio.clickVolumeDb, target: { type: "clickVolume" }, tone: "mon" },
+    { kind: "cue", label: "Cues", db: audio.cueVolumeDb, target: { type: "cueVolume" }, tone: "mon" },
+  ];
+  const set = (kind: "master" | "click" | "cue", db: number) => {
+    const a = useApp.getState().audio;
+    if (!a) return;
+    const patch = kind === "master" ? { fohMasterDb: db } : kind === "click" ? { clickVolumeDb: db } : { cueVolumeDb: db };
+    useApp.setState({ audio: { ...a, ...patch } });
+    ipc.setLevel(kind, db).catch(() => {});
+  };
+  return (
+    <div>
+      <div className="label mb-2">Levels</div>
+      <div className="space-y-1.5 rounded-xl border border-line bg-panel/50 px-3 py-2">
+        {rows.map((r) => (
+          <Mappable key={r.kind} target={r.target} className="rounded-md">
+            <div className="grid grid-cols-[4.6rem_1fr_3.2rem] items-center gap-2 py-0.5">
+              <span className="truncate text-xs font-semibold text-fg-2">{r.label}</span>
+              <Slider value={r.db} min={-40} max={6} step={0.5} tone={r.tone} label={r.label} onChange={(v) => set(r.kind, v)} />
+              <span className="tnum text-right text-[0.7rem] text-muted">{fmtDb(r.db)}</span>
+            </div>
+          </Mappable>
+        ))}
       </div>
     </div>
   );
 }
 
 const TRACK_ORDER: TrackRole[] = ["other", "bass", "drums", "backing", "backup", "original", "vocals"];
-const TRACK_NAMES: Record<TrackRole, string> = {
-  other: "Keys / guitars",
-  bass: "Bass",
-  drums: "Drums",
-  backing: "Backing",
-  backup: "Backup",
-  original: "Original",
-  vocals: "Guide vocal",
-};
+const TRACK_NAMES = TRACK_LABEL;
 
 function setTrack(role: TrackRole, gainDb: number, muted: boolean) {
   const l = useApp.getState().loaded;
@@ -334,7 +382,14 @@ function setTrack(role: TrackRole, gainDb: number, muted: boolean) {
   ipc.setTrack(role, gainDb, muted);
 }
 
+function setSolo(role: TrackRole, solo: boolean) {
+  const l = useApp.getState().loaded;
+  if (l) useApp.getState().setLoaded({ ...l, tracks: l.tracks.map((t) => (t.role === role ? { ...t, solo } : t)) });
+  ipc.setSolo(role, solo);
+}
+
 function LiveMixer({ tracks }: { tracks: TrackInfo[] }) {
+  const anySolo = tracks.some((t) => t.solo);
   const sorted = [...tracks].sort((a, b) => TRACK_ORDER.indexOf(a.role) - TRACK_ORDER.indexOf(b.role));
   return (
     <div>
@@ -343,20 +398,30 @@ function LiveMixer({ tracks }: { tracks: TrackInfo[] }) {
         {sorted.map((t) => (
           <div key={t.role} className="rounded-xl border border-line bg-panel/50 px-3 py-2">
             <div className="flex items-center justify-between gap-2">
-              <div className={cn("truncate text-sm font-semibold", t.muted && "text-muted")}>{TRACK_NAMES[t.role]}</div>
+              <div className={cn("truncate text-sm font-semibold", (t.muted || (anySolo && !t.solo)) && "text-muted")}>{TRACK_NAMES[t.role]}</div>
               <div className="flex shrink-0 gap-1.5 text-[0.6rem] font-bold tracking-wide">
                 {t.toFoh && <span className="text-foh">FOH</span>}
                 {t.toMon && <span className="text-mon">MON</span>}
               </div>
             </div>
             <div className="mt-1.5 flex items-center gap-2">
-              <Slider value={t.gainDb} min={-24} max={6} step={0.5} tone={t.toFoh ? "accent" : "mon"} label={`${TRACK_NAMES[t.role]} level`}
-                onChange={(v) => setTrack(t.role, v, t.muted)} />
-              <span className="tnum w-14 shrink-0 text-right text-[0.7rem] text-muted">{fmtDb(t.gainDb)}</span>
-              <button onClick={() => setTrack(t.role, t.gainDb, !t.muted)}
-                className={cn("h-7 w-14 shrink-0 rounded-md border text-[0.62rem] font-black tracking-wide", t.muted ? "border-err/50 bg-err/15 text-err" : "border-line text-muted hover:text-fg")}>
-                {t.muted ? "MUTED" : "Mute"}
-              </button>
+              <Mappable target={{ type: "trackVolume", role: t.role }} className="min-w-0 flex-1 rounded-md">
+                <Slider value={t.gainDb} min={-24} max={6} step={0.5} tone={t.toFoh ? "accent" : "mon"} label={`${TRACK_NAMES[t.role]} level`}
+                  onChange={(v) => setTrack(t.role, v, t.muted)} />
+              </Mappable>
+              <span className="tnum w-12 shrink-0 text-right text-[0.7rem] text-muted">{fmtDb(t.gainDb)}</span>
+              <Mappable target={{ type: "trackMute", role: t.role }} className="rounded-md">
+                <button onClick={() => setTrack(t.role, t.gainDb, !t.muted)} aria-label={`Mute ${TRACK_NAMES[t.role]}`}
+                  className={cn("h-7 w-8 shrink-0 rounded-md border text-[0.66rem] font-black", t.muted ? "border-err/50 bg-err/15 text-err" : "border-line text-muted hover:text-fg")}>
+                  M
+                </button>
+              </Mappable>
+              <Mappable target={{ type: "trackSolo", role: t.role }} className="rounded-md">
+                <button onClick={() => setSolo(t.role, !t.solo)} aria-label={`Solo ${TRACK_NAMES[t.role]}`}
+                  className={cn("h-7 w-8 shrink-0 rounded-md border text-[0.66rem] font-black", t.solo ? "border-accent/60 bg-accent/20 text-accent" : "border-line text-muted hover:text-fg")}>
+                  S
+                </button>
+              </Mappable>
             </div>
           </div>
         ))}

@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { useApp, usePlayback } from "@/store/app";
 import { importPaths } from "./actions";
 import { isTauri } from "./ipc";
-import type { LoadedInfo, PlaybackStatus, PreparationJob } from "./types";
+import { targetLabel, useMidi } from "./midi";
+import { sourceLabel } from "./midi";
+import type { AudioSettings, LoadedInfo, MidiActivity, MidiMapping, MidiStatus, PlaybackStatus, PreparationJob } from "./types";
 
 /** Wire Rust → UI events once. Returns a cleanup function. */
 export async function connectEvents(): Promise<() => void> {
@@ -25,6 +27,37 @@ export async function connectEvents(): Promise<() => void> {
       if (live) app().setLive({ ...live, index: e.payload.liveIndex });
     }
   }));
+  // Levels / mutes / click changed by a MIDI controller or a mapped key.
+  offs.push(await listen<LoadedInfo>("playback:mixChanged", (e) => {
+    const cur = app().loaded;
+    if (!cur || cur.songId === e.payload.songId) app().setLoaded(e.payload);
+  }));
+  offs.push(await listen<AudioSettings>("audio:levelsChanged", (e) => {
+    const st = app().audioStatus;
+    if (st) app().setAudioStatus({ ...st, settings: e.payload });
+  }));
+
+  // MIDI
+  const midi = useMidi.getState;
+  midi().refresh().catch(() => {});
+  offs.push(await listen("midi:mappingsChanged", () => midi().refresh().catch(() => {})));
+  offs.push(await listen<MidiStatus>("midi:devices", (e) => {
+    const before = midi().status?.devices ?? [];
+    midi().setStatus(e.payload);
+    const added = e.payload.devices.filter((d) => !before.includes(d));
+    if (added.length && before.length + added.length > 0) toast.message(`MIDI connected: ${added.join(", ")}`, { id: "midi-dev" });
+  }));
+  offs.push(await listen<MidiActivity>("midi:activity", (e) => midi().setActivity(e.payload)));
+  offs.push(await listen<{ mapping: MidiMapping; replaced: number }>("midi:learned", (e) => {
+    useMidi.setState({ armed: null });
+    const m = e.payload.mapping;
+    toast.success(`${targetLabel(m.target)} ← ${sourceLabel(m.source)}`, {
+      id: "midi-learn",
+      description: e.payload.replaced ? "Moved from its previous control." : undefined,
+    });
+  }));
+  offs.push(await listen<string>("midi:notice", (e) => toast.message(e.payload, { id: "midi-notice" })));
+
   offs.push(await listen<string>("audio:error", (e) => toast.error(e.payload, { id: "audio-error", duration: 8000 })));
   offs.push(await listen("audio:deviceChanged", () => app().refreshAudio()));
   offs.push(await listen("library:changed", refreshLibrary));

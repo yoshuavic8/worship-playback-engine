@@ -29,6 +29,7 @@ pub struct Ctx {
     pub player: Player,
     pub queue: PrepQueue,
     pub resources: ResourceManager,
+    pub midi: crate::midi::MidiHub,
     pub worker_dir: PathBuf,
     me: OnceLock<Weak<Ctx>>,
 }
@@ -45,7 +46,7 @@ pub fn levels_for(audio: &AudioSettings) -> MixLevels {
         click: db_to_gain(audio.click_volume_db),
         cue: db_to_gain(audio.cue_volume_db),
         monitor_backing: if rehearsal { 1.0 } else { db_to_gain(audio.monitor_backing_db) },
-        foh_master: 1.0,
+        foh_master: db_to_gain(audio.foh_master_db.clamp(-60.0, 6.0)),
         monitor_master: 1.0,
     }
 }
@@ -78,6 +79,7 @@ pub fn init(app: AppHandle, root: PathBuf, resource_dir: Option<PathBuf>) -> Res
         player: Player::new(),
         queue: PrepQueue::new(),
         resources: ResourceManager::new(),
+        midi: crate::midi::MidiHub::new(),
         worker_dir,
         me: OnceLock::new(),
     });
@@ -87,6 +89,7 @@ pub fn init(app: AppHandle, root: PathBuf, resource_dir: Option<PathBuf>) -> Res
     }
     ctx.queue.start(ctx.clone());
     crate::player::spawn_poller(ctx.clone());
+    ctx.midi.start(ctx.clone());
     Ok(ctx)
 }
 
